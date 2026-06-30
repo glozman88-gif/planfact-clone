@@ -1,0 +1,37 @@
+import { useState } from "react";
+
+export interface Range {
+  date_from: string;
+  date_to: string;
+}
+
+export function defaultRange(): Range {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), 0, 1);
+  const to = new Date(now.getFullYear(), 11, 31);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { date_from: fmt(from), date_to: fmt(to) };
+}
+
+export function RangePicker({ range, onChange }: { range: Range; onChange: (r: Range) => void }) {
+  const [local, setLocal] = useState(range);
+  return (
+    <div className="card flex flex-wrap items-end gap-3">
+      <div>
+        <label className="label">С даты</label>
+        <input type="date" className="input" value={local.date_from} onChange={(e) => setLocal({ ...local, date_from: e.target.value })} />
+      </div>
+      <div>
+        <label className="label">По дату</label>
+        <input type="date" className="input" value={local.date_to} onChange={(e) => setLocal({ ...local, date_to: e.target.value })} />
+      </div>
+      <button className="btn-primary" onClick={() => onChange(local)}>Применить</button>
+    </div>
+  );
+}
+
+export function fmtNum(v: string | number): string {
+  const n = Number(v || 0);
+  if (n === 0) return "—";
+  return n.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
+}

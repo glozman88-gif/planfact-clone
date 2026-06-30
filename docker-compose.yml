@@ -1,0 +1,37 @@
+# Запуск всего приложения одной командой: docker compose up -d --build
+# Перед запуском: cp .env.example .env  и заполните пароли/секрет.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: planfact
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-planfact}
+      POSTGRES_DB: planfact
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planfact"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://planfact:${POSTGRES_PASSWORD:-planfact}@db:5432/planfact
+      JWT_SECRET: ${JWT_SECRET:-please_change_me}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SEED_DEMO: ${SEED_DEMO:-1}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+    ports:
+      - "${APP_PORT:-8095}:8000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
