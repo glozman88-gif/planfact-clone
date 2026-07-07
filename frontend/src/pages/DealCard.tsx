@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, money } from "../api/client";
+import type { Product } from "../api/types";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useDealStatuses, useProducts, useProjects } from "../api/hooks";
 import { Modal } from "../components/Modal";
@@ -228,7 +229,7 @@ export function DealCard() {
           </div>
 
           <div className="p-4">
-            {tab === "items" && <ItemsTab dealId={id} items={itemsQ.data ?? []} products={products.data ?? []} onSaved={invalidate} closed={deal.closed} />}
+            {tab === "items" && <ItemsTab dealId={id} companyId={companyId} items={itemsQ.data ?? []} products={products.data ?? []} onSaved={invalidate} closed={deal.closed} />}
             {tab === "income" && (
               <OpsTab title="Платежи от клиентов за проданные товары или услуги" rows={income}
                 accName={accName} partyName={partyName} catName={catName}
@@ -298,16 +299,61 @@ function Progress({ value, color }: { value: number; color: string }) {
   );
 }
 
+// ---- Комбобокс выбора товара из справочника /products (с фильтром и созданием на лету) ----
+function ProductPicker({ value, products, companyId, onSelect, disabled }: {
+  value: string; products: Product[]; companyId: number | null;
+  onSelect: (sel: { product_id?: number | null; name: string; unit?: string; price?: string }) => void; disabled?: boolean;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState(value);
+  useEffect(() => { setQ(value); }, [value]);
+  const term = q.trim().toLowerCase();
+  const filtered = products.filter((p) => !p.is_archived && p.name.toLowerCase().includes(term));
+  const exact = products.find((p) => p.name.toLowerCase() === term);
+  const create = useMutation({
+    mutationFn: async (name: string) => (await api.post("/api/products", { name, unit: "шт", price: "0" }, { params: { company_id: companyId } })).data as Product,
+    onSuccess: (p) => { qc.invalidateQueries({ queryKey: ["products"] }); onSelect({ product_id: p.id, name: p.name, unit: p.unit ?? "шт", price: String(p.price) }); setOpen(false); },
+  });
+  return (
+    <div className="relative">
+      <input className="input" value={q} disabled={disabled} placeholder="Товар или услуга из справочника"
+        onFocus={() => setOpen(true)}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); onSelect({ name: e.target.value, product_id: null }); }} />
+      {open && !disabled && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute z-20 mt-1 max-h-56 w-full min-w-[240px] overflow-auto rounded-md border bg-white py-1 text-sm shadow-lg">
+            {filtered.map((p) => (
+              <button type="button" key={p.id} className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left hover:bg-slate-50"
+                onClick={() => { onSelect({ product_id: p.id, name: p.name, unit: p.unit ?? "шт", price: String(p.price) }); setQ(p.name); setOpen(false); }}>
+                <span>{p.name}{p.is_service && <span className="ml-1 text-xs text-slate-400">услуга</span>}</span>
+                <span className="whitespace-nowrap text-slate-400">{money(p.price)}</span>
+              </button>
+            ))}
+            {filtered.length === 0 && <div className="px-3 py-1.5 text-slate-400">Ничего не найдено</div>}
+            {term && !exact && (
+              <button type="button" className="block w-full border-t px-3 py-1.5 text-left text-brand hover:bg-slate-50" disabled={create.isPending}
+                onClick={() => create.mutate(q.trim())}>+ Создать товар «{q.trim()}»</button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---- Вкладка «Товары и услуги» ----
-function ItemsTab({ dealId, items, products, onSaved, closed }: any) {
+function ItemsTab({ dealId, companyId, items, products, onSaved, closed }: any) {
   const [rows, setRows] = useState<any[]>(() => items.length ? items.map((i: any) => ({ ...i })) : []);
   const [dirty, setDirty] = useState(false);
   const upd = (idx: number, k: string, v: any) => { setRows(rows.map((r, i) => i === idx ? { ...r, [k]: v } : r)); setDirty(true); };
   const addRow = () => { setRows([...rows, { name: "", quantity: "1", unit: "шт", price: "0", discount: "0" }]); setDirty(true); };
   const delRow = (idx: number) => { setRows(rows.filter((_, i) => i !== idx)); setDirty(true); };
-  const pickProduct = (idx: number, pid: string) => {
-    const p = products.find((x: any) => x.id === Number(pid));
-    if (p) setRows(rows.map((r, i) => i === idx ? { ...r, product_id: p.id, name: p.name, unit: p.unit ?? "шт", price: String(p.price) } : r));
+  const selectItem = (idx: number, sel: any) => {
+    setRows(rows.map((r, i) => i === idx ? (sel.product_id
+      ? { ...r, product_id: sel.product_id, name: sel.name, unit: sel.unit ?? r.unit, price: sel.price ?? r.price }
+      : { ...r, name: sel.name, product_id: null }) : r));
     setDirty(true);
   };
   const lineTotal = (r: any) => Number(r.quantity || 0) * Number(r.price || 0) * (1 - Number(r.discount || 0) / 100);
@@ -343,10 +389,9 @@ function ItemsTab({ dealId, items, products, onSaved, closed }: any) {
           <tbody>
             {rows.map((r, idx) => (
               <tr key={idx}>
-                <td>
-                  <input className="input" list={`prod-${idx}`} value={r.name} disabled={closed}
-                    onChange={(e) => { const p = products.find((x: any) => x.name === e.target.value); if (p) pickProduct(idx, String(p.id)); else upd(idx, "name", e.target.value); }} />
-                  <datalist id={`prod-${idx}`}>{products.map((p: any) => <option key={p.id} value={p.name} />)}</datalist>
+                <td className="min-w-[220px]">
+                  <ProductPicker value={r.name} products={products} companyId={companyId} disabled={closed}
+                    onSelect={(sel) => selectItem(idx, sel)} />
                 </td>
                 <td><input type="number" step="0.001" className="input w-20 text-right" value={r.quantity} disabled={closed} onChange={(e) => upd(idx, "quantity", e.target.value)} /></td>
                 <td><input className="input w-14" value={r.unit ?? ""} disabled={closed} onChange={(e) => upd(idx, "unit", e.target.value)} /></td>
@@ -545,9 +590,10 @@ function InvoiceModal({ dealId, companyId, counterpartyId, products, existingCou
           {items.map((x, i) => (
             <div key={i} className="flex items-end gap-2">
               <div className="flex-1"><label className="label">Позиция</label>
-                <input className="input" list={`inv-prod-${i}`} value={x.name}
-                  onChange={(e) => { const p = products.find((pp: any) => pp.name === e.target.value); if (p) setItems(items.map((it, idx) => idx === i ? { ...it, product_id: p.id, name: p.name, price: String(p.price) } : it)); else upd(i, "name", e.target.value); }} />
-                <datalist id={`inv-prod-${i}`}>{products.map((p: any) => <option key={p.id} value={p.name} />)}</datalist>
+                <ProductPicker value={x.name} products={products} companyId={companyId}
+                  onSelect={(sel) => setItems(items.map((it, idx) => idx === i ? (sel.product_id
+                    ? { ...it, product_id: sel.product_id, name: sel.name, price: sel.price ?? it.price }
+                    : { ...it, name: sel.name, product_id: null }) : it))} />
               </div>
               <div><label className="label">Кол-во</label><input type="number" step="0.001" className="input w-20" value={x.quantity} onChange={(e) => upd(i, "quantity", e.target.value)} /></div>
               <div><label className="label">Цена</label><input type="number" step="0.01" className="input w-28" value={x.price} onChange={(e) => upd(i, "price", e.target.value)} /></div>
