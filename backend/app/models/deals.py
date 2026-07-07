@@ -40,6 +40,8 @@ class Deal(Base, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(2000))
     # Метод учёта сделки (A8): calculation (по умолчанию) | cash
     accounting_method: Mapped[str] = mapped_column(String(16), default="calculation", server_default="calculation")
+    # Режим НДС сделки (как в модалке создания): with_vat | without_vat
+    vat_mode: Mapped[str] = mapped_column(String(16), default="with_vat", server_default="with_vat")
     # Закрытая сделка — read-only (C7)
     closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 

@@ -87,7 +87,7 @@ export function Deals() {
 
       {adding && (
         <AddDeal kind={kind} onClose={() => setAdding(false)} onSave={(b) => create.mutate(b)}
-          statuses={statuses.data ?? []} parties={parties.data ?? []} projects={projects.data ?? []} />
+          parties={parties.data ?? []} />
       )}
 
       {shipDeal && (
@@ -141,30 +141,44 @@ function ShipmentsModal({ deal, kind, onClose }: { deal: any; kind: "sale" | "pu
   );
 }
 
-function AddDeal({ kind, onClose, onSave, statuses, parties, projects }: any) {
-  const [f, setF] = useState<any>({ name: "", kind, status_id: "", counterparty_id: "", project_id: "", amount: "", cost: "", start_date: "", note: "" });
+function AddDeal({ kind, onClose, onSave, parties }: any) {
+  const isSale = kind === "sale";
+  const [f, setF] = useState<any>({
+    name: "", start_date: new Date().toISOString().slice(0, 10), counterparty_id: "", vat_mode: "with_vat", note: "",
+  });
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
+  const Field = ({ label, hint, children }: any) => (
+    <div className="grid grid-cols-[150px_1fr] items-start gap-3">
+      <label className="pt-2 text-sm font-medium text-slate-600">{label}{hint && <span className="ml-1 text-slate-300" title={hint}>?</span>}</label>
+      <div>{children}</div>
+    </div>
+  );
   return (
-    <Modal title={kind === "sale" ? "Новая сделка продажи" : "Новая сделка закупки"} onClose={onClose} wide>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ ...f, status_id: f.status_id || null, counterparty_id: f.counterparty_id || null, project_id: f.project_id || null, amount: String(f.amount || "0"), cost: String(f.cost || "0"), start_date: f.start_date || null }); }} className="grid grid-cols-2 gap-3">
-        <div className="col-span-2"><label className="label">Название</label><input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} required /></div>
-        <div><label className="label">{kind === "sale" ? "Клиент" : "Поставщик"}</label>
+    <Modal title={isSale ? "Новая продажа" : "Новая закупка"} onClose={onClose} wide>
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name: f.name, kind, start_date: f.start_date || null, counterparty_id: f.counterparty_id || null, vat_mode: f.vat_mode, note: f.note || null }); }} className="space-y-4">
+        <Field label="Название сделки">
+          <input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Например, разработка сайта" required autoFocus />
+        </Field>
+        <Field label="Дата сделки">
+          <input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} />
+        </Field>
+        <Field label={isSale ? "Клиент" : "Поставщик"}>
           <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
-            <option value="">—</option>{parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select></div>
-        <div><label className="label">Статус</label>
-          <select className="input" value={f.status_id} onChange={(e) => set("status_id", e.target.value)}>
-            <option value="">—</option>{statuses.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select></div>
-        <div><label className="label">Сумма сделки</label><input type="number" step="0.01" className="input" value={f.amount} onChange={(e) => set("amount", e.target.value)} /></div>
-        <div><label className="label">Себестоимость</label><input type="number" step="0.01" className="input" value={f.cost} onChange={(e) => set("cost", e.target.value)} /></div>
-        <div><label className="label">Проект</label>
-          <select className="input" value={f.project_id} onChange={(e) => set("project_id", e.target.value)}>
-            <option value="">—</option>{projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select></div>
-        <div><label className="label">Дата начала</label><input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></div>
-        <div className="col-span-2 flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
+            <option value="">{isSale ? "Укажите, кому продаёте товар или услугу" : "Укажите, у кого покупаете"}</option>
+            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
+        <Field label="НДС" hint="Как учитывать НДС в суммах сделки">
+          <select className="input" value={f.vat_mode} onChange={(e) => set("vat_mode", e.target.value)}>
+            <option value="with_vat">С учётом НДС</option>
+            <option value="without_vat">Без НДС</option>
+          </select>
+        </Field>
+        <Field label="Комментарий">
+          <textarea className="input min-h-[80px]" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Ваш комментарий или пояснение к этой сделке" />
+        </Field>
+        <div className="flex justify-end gap-3 pt-2">
+          <button type="button" className="btn-ghost text-brand" onClick={onClose}>Отменить</button>
           <button className="btn-primary">Создать</button>
         </div>
       </form>

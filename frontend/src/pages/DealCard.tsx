@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, money } from "../api/client";
@@ -27,7 +27,11 @@ export function DealCard() {
 
   const [tab, setTab] = useState<"items" | "income" | "outcome" | "shipments" | "invoices">("items");
   const [editOp, setEditOp] = useState<Partial<Operation> | null>(null);
+  const [attachType, setAttachType] = useState<"income" | "outcome" | null>(null);
   const [invoicing, setInvoicing] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [statusMenu, setStatusMenu] = useState(false);
+  const [uchetMenu, setUchetMenu] = useState(false);
 
   const invalidate = () => DEAL_INVALIDATE.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
 
@@ -68,7 +72,9 @@ export function DealCard() {
 
   const accName = (x?: number | null) => accounts.data?.find((a) => a.id === x)?.name ?? "—";
   const catName = (x?: number | null) => categories.data?.find((c) => c.id === x)?.name ?? "";
-  const partyName = (x?: number | null) => parties.data?.find((p) => p.id === x)?.name ?? "—";
+  const partyName = (x?: number | null) => parties.data?.find((p) => p.id === x)?.name ?? "Не выбран";
+  const curStatus = statuses.data?.find((st) => st.id === deal?.status_id);
+  const dot = (st: any) => st?.is_won ? "bg-emerald-500" : st?.is_lost ? "bg-red-500" : st?.name === "В работе" ? "bg-sky-500" : "bg-amber-400";
 
   if (dealQ.isLoading || !deal) return <div className="text-slate-500">Загрузка сделки…</div>;
 
@@ -77,6 +83,7 @@ export function DealCard() {
   const shipped = Number(s?.shipped ?? 0);
   const openAddOp = (type: "income" | "outcome") =>
     setEditOp({ type, status: "committed", op_date: today(), counterparty_id: deal.counterparty_id, project_id: deal.project_id } as any);
+  const uchet = (deal.accounting_method || "calculation") === "cash" ? "Кассовым методом" : "Методом начисления";
 
   const TABS: [typeof tab, string, number][] = [
     ["items", "Товары и услуги", itemsQ.data?.length ?? 0],
@@ -88,22 +95,53 @@ export function DealCard() {
 
   return (
     <div className="space-y-4">
+      <div className="text-xs text-slate-400"><Link to="/deals" className="hover:underline">{isSale ? "Сделки продаж" : "Сделки закупок"}</Link></div>
       <div className="flex items-center gap-3">
-        <Link to="/deals" className="text-brand hover:underline">← Сделки</Link>
         <h1 className="text-2xl font-bold">{deal.name}</h1>
-        <button className="ml-auto text-red-500 hover:underline" onClick={() => confirm("Удалить сделку?") && removeDeal.mutate()}>Удалить</button>
+        <div className="relative ml-auto">
+          <button className="rounded-md border px-3 py-1.5 text-slate-500 hover:bg-slate-50" onClick={() => setMenu(!menu)}>⋯</button>
+          {menu && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
+              <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border bg-white py-1 text-sm shadow-lg">
+                <button className="block w-full px-4 py-2 text-left hover:bg-slate-50" onClick={() => { setMenu(false); updateDeal.mutate({ closed: !deal.closed }); }}>
+                  {deal.closed ? "Открыть сделку" : "Закрыть сделку"}
+                </button>
+                <button className="block w-full px-4 py-2 text-left text-red-600 hover:bg-slate-50" onClick={() => { setMenu(false); if (confirm("Удалить сделку?")) removeDeal.mutate(); }}>
+                  Удалить сделку
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Сводные карточки */}
       <div className="grid gap-4 lg:grid-cols-4">
         {/* Сумма + статус */}
         <div className="card space-y-3">
-          <div className="text-xs uppercase text-slate-400">Сделка на сумму</div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase text-slate-400">Сделка на сумму <span title="Максимум из суммы позиций, оплат и отгрузок" className="cursor-help text-slate-300">ⓘ</span></span>
+            <div className="relative">
+              <button className="flex items-center gap-1.5 rounded-md bg-slate-100 px-2.5 py-1 text-sm" onClick={() => setStatusMenu(!statusMenu)}>
+                <span className={`h-2 w-2 rounded-full ${dot(curStatus)}`} />{curStatus?.name ?? "Без статуса"} ▾
+              </button>
+              {statusMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setStatusMenu(false)} />
+                  <div className="absolute right-0 z-20 mt-1 w-48 rounded-md border bg-white py-1 text-sm shadow-lg">
+                    {statuses.data?.map((st) => (
+                      <button key={st.id} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-50"
+                        onClick={() => { setStatusMenu(false); updateDeal.mutate({ status_id: st.id }); }}>
+                        <span className={`h-2 w-2 rounded-full ${dot(st)}`} />{st.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <div className="text-2xl font-bold">{money(amount)}</div>
-          <select className="input" value={deal.status_id ?? ""} onChange={(e) => updateDeal.mutate({ status_id: e.target.value ? Number(e.target.value) : null })}>
-            <option value="">Без статуса</option>
-            {statuses.data?.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
-          </select>
           <div className="space-y-1 border-t pt-2 text-sm">
             <Row label="Тип" value={isSale ? "Продажа" : "Закупка"} />
             <Row label={isSale ? "Клиент" : "Поставщик"} value={partyName(deal.counterparty_id)} />
@@ -115,35 +153,61 @@ export function DealCard() {
         <div className="card space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs uppercase text-slate-400">Поступления</span>
-            <button className="text-lg text-brand" title="Добавить поступление" onClick={() => openAddOp("income")}>＋</button>
+            <button className="text-lg text-slate-400 hover:text-brand" title="Добавить поступление" onClick={() => setAttachType("income")}>⊕</button>
           </div>
           <div className="text-2xl font-bold text-emerald-700">{money(received)}</div>
-          <div className="text-xs text-slate-400">из {money(amount)}</div>
-          <Progress value={pct(received, amount)} color="bg-emerald-500" />
-          <div className="text-xs text-slate-500">Поступило: {pct(received, amount)}%</div>
-          <div className="text-sm">{isSale ? "Клиент должен" : "Мы должны"}: <b>{money(Number(s?.debt ?? 0))}</b></div>
+          {amount > 0 ? (
+            <>
+              <div className="text-xs text-slate-400">из {money(amount)}</div>
+              <Progress value={pct(received, amount)} color="bg-emerald-500" />
+              <div className="text-xs text-slate-500">Поступило: {pct(received, amount)}%</div>
+              <div className="text-sm">{isSale ? "Клиент должен" : "Мы должны"}: <b>{money(Number(s?.debt ?? 0))}</b></div>
+            </>
+          ) : <div className="text-sm text-slate-400">Нет поступлений</div>}
         </div>
 
         {/* Отгрузки */}
         <div className="card space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs uppercase text-slate-400">{isSale ? "Отгрузки клиенту" : "Поставки от поставщика"}</span>
-            <button className="text-lg text-brand" title="Добавить" onClick={() => setTab("shipments")}>＋</button>
+            <span className="text-xs uppercase text-slate-400">{isSale ? "Отгрузки клиенту" : "Поставки"}</span>
+            <button className="text-lg text-slate-400 hover:text-brand" title="Добавить" onClick={() => setTab("shipments")}>⊕</button>
           </div>
           <div className="text-2xl font-bold text-sky-700">{money(shipped)}</div>
-          <div className="text-xs text-slate-400">из {money(amount)}</div>
-          <Progress value={pct(shipped, amount)} color="bg-sky-500" />
-          <div className="text-xs text-slate-500">{shipped > 0 ? `${isSale ? "Отгружено" : "Поставлено"}: ${pct(shipped, amount)}%` : `Нет ${isSale ? "отгрузок" : "поставок"}`}</div>
-          <div className="text-sm">{isSale ? "Мы должны" : "Нам должны"}: <b>{money(Number(s?.goods_debt ?? 0))}</b></div>
+          {shipped > 0 && amount > 0 ? (
+            <>
+              <div className="text-xs text-slate-400">из {money(amount)}</div>
+              <Progress value={pct(shipped, amount)} color="bg-sky-500" />
+              <div className="text-xs text-slate-500">{isSale ? "Отгружено" : "Поставлено"}: {pct(shipped, amount)}%</div>
+              <div className="text-sm">{isSale ? "Мы должны" : "Нам должны"}: <b>{money(Number(s?.goods_debt ?? 0))}</b></div>
+            </>
+          ) : <div className="text-sm text-slate-400">Нет {isSale ? "отгрузок" : "поставок"}</div>}
         </div>
 
         {/* Прибыль */}
         <div className="card space-y-2">
-          <div className="text-xs uppercase text-slate-400">Прибыль сделки</div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase text-slate-400">Прибыль сделки <span title="Доходы минус расходы по сделке" className="cursor-help text-slate-300">ⓘ</span></span>
+            <div className="relative">
+              <button className="text-sm text-brand" onClick={() => setUchetMenu(!uchetMenu)}>Учёт ▾</button>
+              {uchetMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setUchetMenu(false)} />
+                  <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border bg-white py-1 text-sm shadow-lg">
+                    {([["calculation", "Методом начисления"], ["cash", "Кассовым методом"]] as const).map(([v, lbl]) => (
+                      <button key={v} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-50"
+                        onClick={() => { setUchetMenu(false); updateDeal.mutate({ accounting_method: v }); }}>
+                        <span className={`h-3 w-3 rounded-full border ${(deal.accounting_method || "calculation") === v ? "border-brand bg-brand" : "border-slate-300"}`} />{lbl}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <div className={`text-2xl font-bold ${Number(s?.profit ?? 0) < 0 ? "text-red-600" : "text-slate-800"}`}>
             {s?.profit == null ? "—" : money(Number(s.profit))}
           </div>
-          <div className="text-xs text-slate-400">Рентабельность {s?.margin == null ? "н/о" : s.margin + "%"}</div>
+          <div className="text-xs text-slate-400">Рентабельность {s?.margin == null ? "н/о" : s.margin + "%"} · {uchet}</div>
           <div className="space-y-1 border-t pt-2 text-sm">
             <Row label="Доходы" value={s?.income == null ? "—" : money(Number(s.income))} />
             <Row label="Расходы" value={money(Number(s?.outcome ?? 0))} valueClass="text-red-600" />
@@ -157,7 +221,7 @@ export function DealCard() {
           <div className="flex flex-wrap gap-1 border-b px-3 pt-3">
             {TABS.map(([k, lbl, n]) => (
               <button key={k} onClick={() => setTab(k)}
-                className={`rounded-t-md px-3 py-2 text-sm ${tab === k ? "border-b-2 border-brand font-semibold text-brand-dark" : "text-slate-500 hover:text-slate-700"}`}>
+                className={`rounded-t-md px-3 py-2 text-sm uppercase ${tab === k ? "border-b-2 border-brand font-semibold text-brand-dark" : "text-slate-500 hover:text-slate-700"}`}>
                 {lbl} <span className="text-slate-400">{n}</span>
               </button>
             ))}
@@ -168,25 +232,24 @@ export function DealCard() {
             {tab === "income" && (
               <OpsTab title="Платежи от клиентов за проданные товары или услуги" rows={income}
                 accName={accName} partyName={partyName} catName={catName}
-                onAdd={() => openAddOp("income")} onEdit={(o) => setEditOp(o)} onDel={(oid) => confirm("Удалить операцию?") && removeOp.mutate(oid)} />
+                onAdd={() => setAttachType("income")} onEdit={(o) => setEditOp(o)} onDel={(oid) => confirm("Удалить операцию?") && removeOp.mutate(oid)} />
             )}
             {tab === "outcome" && (
               <OpsTab title="Понесённые затраты по сделке" rows={outcome}
                 accName={accName} partyName={partyName} catName={catName}
-                onAdd={() => openAddOp("outcome")} onEdit={(o) => setEditOp(o)} onDel={(oid) => confirm("Удалить операцию?") && removeOp.mutate(oid)} />
+                onAdd={() => setAttachType("outcome")} onEdit={(o) => setEditOp(o)} onDel={(oid) => confirm("Удалить операцию?") && removeOp.mutate(oid)} />
             )}
             {tab === "shipments" && <ShipmentsTab dealId={id} isSale={isSale} rows={shipQ.data ?? []} onSaved={invalidate} closed={deal.closed} />}
             {tab === "invoices" && <InvoicesTab rows={invQ.data ?? []} partyName={partyName} onIssue={() => setInvoicing(true)} />}
           </div>
         </div>
 
-        {/* Комментарий к сделке */}
-        <div className="card space-y-2">
+        {/* Файлы и комментарии */}
+        <div className="card flex flex-col">
           <h3 className="text-sm font-semibold text-slate-700">Файлы и комментарии</h3>
-          <textarea className="input min-h-[120px]" defaultValue={deal.note ?? ""}
-            placeholder="Комментарий или пояснение к сделке" key={deal.note}
+          <div className="flex-1 py-6 text-center text-xs text-slate-400">Прикрепляйте файлы и оставляйте комментарии для себя и своих коллег</div>
+          <textarea className="input min-h-[70px]" defaultValue={deal.note ?? ""} placeholder="Написать комментарий" key={deal.note}
             onBlur={(e) => { if (e.target.value !== (deal.note ?? "")) updateDeal.mutate({ note: e.target.value || null }); }} />
-          <p className="text-xs text-slate-400">Комментарий сохраняется автоматически при потере фокуса.</p>
         </div>
       </div>
 
@@ -194,6 +257,12 @@ export function DealCard() {
         <OperationModal op={editOp} error={saveOp.error}
           onClose={() => { saveOp.reset(); setEditOp(null); }} onSave={(o: any) => saveOp.mutate(o)}
           accounts={accounts.data ?? []} categories={categories.data ?? []} projects={projects.data ?? []} parties={parties.data ?? []} />
+      )}
+      {attachType && (
+        <AttachOpsModal dealId={id} companyId={companyId} type={attachType} attached={attachType === "income" ? income : outcome}
+          accName={accName} partyName={partyName} catName={catName}
+          onClose={() => setAttachType(null)} onSaved={invalidate}
+          onCreateNew={() => { const t = attachType; setAttachType(null); openAddOp(t); }} />
       )}
       {invoicing && (
         <InvoiceModal dealId={id} companyId={companyId} counterpartyId={deal.counterparty_id}
@@ -208,7 +277,7 @@ function pickDeal(d: any) {
   return {
     kind: d.kind, name: d.name, status_id: d.status_id, counterparty_id: d.counterparty_id, project_id: d.project_id,
     amount: String(d.amount), cost: String(d.cost), currency_code: d.currency_code, start_date: d.start_date,
-    close_date: d.close_date, note: d.note, accounting_method: d.accounting_method, closed: d.closed,
+    close_date: d.close_date, note: d.note, accounting_method: d.accounting_method, vat_mode: d.vat_mode, closed: d.closed,
   };
 }
 
@@ -231,8 +300,7 @@ function Progress({ value, color }: { value: number; color: string }) {
 
 // ---- Вкладка «Товары и услуги» ----
 function ItemsTab({ dealId, items, products, onSaved, closed }: any) {
-  const [rows, setRows] = useState<any[]>(() =>
-    items.length ? items.map((i: any) => ({ ...i })) : []);
+  const [rows, setRows] = useState<any[]>(() => items.length ? items.map((i: any) => ({ ...i })) : []);
   const [dirty, setDirty] = useState(false);
   const upd = (idx: number, k: string, v: any) => { setRows(rows.map((r, i) => i === idx ? { ...r, [k]: v } : r)); setDirty(true); };
   const addRow = () => { setRows([...rows, { name: "", quantity: "1", unit: "шт", price: "0", discount: "0" }]); setDirty(true); };
@@ -253,6 +321,16 @@ function ItemsTab({ dealId, items, products, onSaved, closed }: any) {
     onSuccess: () => { setDirty(false); onSaved(); },
   });
 
+  if (rows.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-10 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-2xl text-slate-300">▥</div>
+        <div className="font-semibold">Добавьте товары или услуги в сделку</div>
+        <div className="max-w-sm text-sm text-slate-400">Наполните сделку товарами/услугами, которые покупаете или продаёте своим клиентам</div>
+        {!closed && <button className="btn-primary" onClick={addRow}>Добавить</button>}
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -278,9 +356,8 @@ function ItemsTab({ dealId, items, products, onSaved, closed }: any) {
                 <td className="text-right">{!closed && <button className="text-red-500" onClick={() => delRow(idx)}>×</button>}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={7} className="py-6 text-center text-slate-400">Нет позиций</td></tr>}
           </tbody>
-          {rows.length > 0 && <tfoot><tr className="border-t-2 font-semibold"><td colSpan={5} className="text-right">Итого</td><td className="text-right">{money(total)}</td><td></td></tr></tfoot>}
+          <tfoot><tr className="border-t-2 font-semibold"><td colSpan={5} className="text-right">Итого</td><td className="text-right">{money(total)}</td><td></td></tr></tfoot>
         </table>
       </div>
       {dirty && !closed && (
@@ -321,6 +398,67 @@ function OpsTab({ title, rows, accName, partyName, catName, onAdd, onEdit, onDel
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ---- Модалка привязки существующих операций к сделке ----
+function AttachOpsModal({ dealId, companyId, type, attached, accName, partyName, catName, onClose, onSaved, onCreateNew }: any) {
+  const qc = useQueryClient();
+  const [search, setSearch] = useState("");
+  const label = type === "income" ? "поступлений" : "расходов";
+  const pool = useQuery({
+    queryKey: ["attach-pool", companyId, type],
+    queryFn: async () => (await api.get("/api/operations", { params: { company_id: companyId, types: type, limit: 500 } })).data.items as Operation[],
+  });
+  const set = useMutation({
+    mutationFn: ({ id, deal }: { id: number; deal: number | null }) =>
+      api.post("/api/operations/bulk-update", { ids: [id], set: { deal_id: deal } }, { params: { company_id: companyId } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["attach-pool"] }); onSaved(); },
+  });
+  const match = (o: Operation) => !search || (o.description ?? "").toLowerCase().includes(search.toLowerCase()) || String(o.amount).includes(search);
+  const attachable = (pool.data ?? []).filter((o) => o.deal_id == null && match(o));
+  const attachedRows = (attached as Operation[]).filter(match);
+  const attachedSum = attachedRows.reduce((s, o) => s + Number(o.amount), 0);
+
+  const RowLine = ({ o, action }: { o: Operation; action: any }) => (
+    <tr className="hover:bg-slate-50">
+      <td className="whitespace-nowrap">{o.op_date}</td><td>{accName(o.account_id)}</td><td>{partyName(o.counterparty_id)}</td>
+      <td>{catName(o.category_id)}</td><td className="text-right">{money(o.amount)}</td><td className="text-right">{action}</td>
+    </tr>
+  );
+
+  return (
+    <Modal title="" onClose={onClose} wide>
+      <div className="space-y-3">
+        <h2 className="text-lg font-bold">Добавьте операции к сделке или <button className="text-brand hover:underline" onClick={onCreateNew}>создайте новую</button></h2>
+        <input className="input" placeholder="Поиск по операциям" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div>
+          <div className="mb-1 text-sm font-medium text-slate-500">Прикреплённые к сделке <span className="text-slate-400">{attachedRows.length}</span></div>
+          <table className="table text-sm">
+            <thead><tr><th>Дата</th><th>Счёт</th><th>Контрагент</th><th>Статья</th><th className="text-right">Сумма</th><th></th></tr></thead>
+            <tbody>
+              {attachedRows.map((o) => <RowLine key={o.id} o={o} action={<button className="text-red-500 hover:underline" onClick={() => set.mutate({ id: o.id, deal: null })}>открепить</button>} />)}
+              {attachedRows.length === 0 && <tr><td colSpan={6} className="py-2 text-center text-slate-400">—</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div className="mb-1 text-sm font-medium text-slate-500">Можно прикрепить к сделке <span className="text-slate-400">{attachable.length}</span></div>
+          <div className="max-h-64 overflow-y-auto">
+            <table className="table text-sm">
+              <tbody>
+                {attachable.map((o) => <RowLine key={o.id} o={o} action={<button className="text-brand hover:underline" onClick={() => set.mutate({ id: o.id, deal: dealId })}>прикрепить</button>} />)}
+                {attachable.length === 0 && <tr><td colSpan={6} className="py-2 text-center text-slate-400">Нет свободных операций</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t pt-3">
+          <div className="text-sm">Сумма {label} в сделке: <b>{money(attachedSum)}</b></div>
+          <button className="btn-primary" onClick={onClose}>Закрыть</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

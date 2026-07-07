@@ -324,6 +324,7 @@ class DealIn(BaseModel):
     close_date: date | None = None
     note: str | None = None
     accounting_method: str = "calculation"
+    vat_mode: str = "with_vat"
     closed: bool = False
 
 
@@ -342,6 +343,7 @@ class DealOut(ORMModel):
     close_date: date | None
     note: str | None
     accounting_method: str = "calculation"
+    vat_mode: str = "with_vat"
     closed: bool = False
 
 
