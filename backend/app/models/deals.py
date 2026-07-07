@@ -46,6 +46,18 @@ class Deal(Base, TimestampMixin):
     closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
+class DealComment(Base, TimestampMixin):
+    """Комментарий к сделке (лента «Файлы и комментарии»)."""
+
+    __tablename__ = "deal_comments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("deals.id", ondelete="CASCADE"), index=True)
+    author: Mapped[str | None] = mapped_column(String(255))
+    text: Mapped[str] = mapped_column(String(4000))
+
+
 class DealItem(Base, TimestampMixin):
     """Позиция сделки (вкладка «Товары и услуги»): что продаём/закупаем по сделке."""
 

@@ -1,12 +1,17 @@
 """Сделки и счета на оплату (со строками-позициями)."""
+import os
+import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbDep
-from app.models import Deal, DealItem, Invoice, InvoiceItem, Operation, Shipment
+from app.core.config import settings
+from app.models import Attachment, Deal, DealComment, DealItem, Invoice, InvoiceItem, Operation, Shipment
 from app.models.enums import DealKind, OperationStatus, OperationType
 from app.schemas.entities import (
     DealIn,
@@ -49,7 +54,11 @@ async def _calc_deal(db, company_id: int, dl: Deal) -> dict:
     deal_value = max(dl.amount, paid, provided)
     if is_sale:
         income = paid if method == "cash" else provided
-        outcome = provided_cost or linked_outcome or dl.cost
+        # Расходы сделки = себестоимость отгрузок + привязанные расходные операции
+        # (раньше был «or» — при наличии себестоимости отгрузки привязанные расходы терялись).
+        outcome = provided_cost + linked_outcome
+        if outcome == ZERO:
+            outcome = dl.cost  # запасной вариант для старых сделок с ручной себестоимостью
         profit = income - outcome
         profitability = round(float(profit) / float(income) * 100, 1) if (income and profit > 0) else None
     else:
@@ -171,6 +180,94 @@ async def get_deal(deal_id: int, db: DbDep, _: CurrentUser):
     if deal is None:
         raise HTTPException(404, "Сделка не найдена")
     return deal
+
+
+# ---------- Файлы и комментарии сделки ----------
+class CommentIn(BaseModel):
+    text: str
+
+
+@router.get("/api/deals/{deal_id}/comments", tags=["deals"])
+async def list_comments(deal_id: int, db: DbDep, _: CurrentUser):
+    rows = (await db.execute(
+        select(DealComment).where(DealComment.deal_id == deal_id).order_by(DealComment.id)
+    )).scalars().all()
+    return [{"id": r.id, "author": r.author, "text": r.text,
+             "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+
+@router.post("/api/deals/{deal_id}/comments", status_code=201, tags=["deals"])
+async def add_comment(deal_id: int, payload: CommentIn, db: DbDep, current: CurrentUser):
+    deal = await db.get(Deal, deal_id)
+    if deal is None:
+        raise HTTPException(404, "Сделка не найдена")
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Пустой комментарий")
+    cm = DealComment(company_id=deal.company_id, deal_id=deal_id, author=current.email, text=text)
+    db.add(cm)
+    await db.commit()
+    await db.refresh(cm)
+    return {"id": cm.id, "author": cm.author, "text": cm.text,
+            "created_at": cm.created_at.isoformat() if cm.created_at else None}
+
+
+@router.delete("/api/deal-comments/{comment_id}", status_code=204, tags=["deals"])
+async def delete_comment(comment_id: int, db: DbDep, _: CurrentUser):
+    cm = await db.get(DealComment, comment_id)
+    if cm is not None:
+        await db.delete(cm)
+        await db.commit()
+
+
+@router.get("/api/deals/{deal_id}/files", tags=["deals"])
+async def list_deal_files(deal_id: int, db: DbDep, _: CurrentUser):
+    rows = (await db.execute(
+        select(Attachment).where(Attachment.entity_type == "deal", Attachment.entity_id == deal_id)
+        .order_by(Attachment.id)
+    )).scalars().all()
+    return [{"id": r.id, "filename": r.filename, "size": r.size,
+             "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+
+@router.post("/api/deals/{deal_id}/files", status_code=201, tags=["deals"])
+async def upload_deal_file(deal_id: int, db: DbDep, _: CurrentUser, file: UploadFile = File(...)):
+    deal = await db.get(Deal, deal_id)
+    if deal is None:
+        raise HTTPException(404, "Сделка не найдена")
+    folder = os.path.join(settings.upload_dir, f"deal_{deal_id}")
+    os.makedirs(folder, exist_ok=True)
+    safe = (file.filename or "file").replace("/", "_")
+    stored = os.path.join(folder, f"{uuid.uuid4().hex}_{safe}")
+    content = await file.read()
+    with open(stored, "wb") as fh:
+        fh.write(content)
+    att = Attachment(company_id=deal.company_id, entity_type="deal", entity_id=deal_id,
+                     filename=safe, stored_path=stored, size=len(content), content_type=file.content_type)
+    db.add(att)
+    await db.commit()
+    await db.refresh(att)
+    return {"id": att.id, "filename": att.filename, "size": att.size}
+
+
+@router.get("/api/deal-files/{att_id}/download", tags=["deals"])
+async def download_deal_file(att_id: int, db: DbDep, _: CurrentUser):
+    att = await db.get(Attachment, att_id)
+    if att is None or att.entity_type != "deal" or not os.path.isfile(att.stored_path):
+        raise HTTPException(404, "Файл не найден")
+    return FileResponse(att.stored_path, filename=att.filename)
+
+
+@router.delete("/api/deal-files/{att_id}", status_code=204, tags=["deals"])
+async def delete_deal_file(att_id: int, db: DbDep, _: CurrentUser):
+    att = await db.get(Attachment, att_id)
+    if att is not None:
+        try:
+            os.remove(att.stored_path)
+        except OSError:
+            pass
+        await db.delete(att)
+        await db.commit()
 
 
 # ---------- Сделки ----------

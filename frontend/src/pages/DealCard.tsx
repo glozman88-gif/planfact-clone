@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, money } from "../api/client";
+import { api, downloadFile, money } from "../api/client";
 import type { Product } from "../api/types";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useDealStatuses, useProducts, useProjects } from "../api/hooks";
@@ -246,12 +246,7 @@ export function DealCard() {
         </div>
 
         {/* Файлы и комментарии */}
-        <div className="card flex flex-col">
-          <h3 className="text-sm font-semibold text-slate-700">Файлы и комментарии</h3>
-          <div className="flex-1 py-6 text-center text-xs text-slate-400">Прикрепляйте файлы и оставляйте комментарии для себя и своих коллег</div>
-          <textarea className="input min-h-[70px]" defaultValue={deal.note ?? ""} placeholder="Написать комментарий" key={deal.note}
-            onBlur={(e) => { if (e.target.value !== (deal.note ?? "")) updateDeal.mutate({ note: e.target.value || null }); }} />
-        </div>
+        <DealComments dealId={id} />
       </div>
 
       {editOp && (
@@ -295,6 +290,57 @@ function Progress({ value, color }: { value: number; color: string }) {
   return (
     <div className="h-1.5 w-full rounded-full bg-slate-100">
       <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${Math.min(100, value)}%` }} />
+    </div>
+  );
+}
+
+// ---- Файлы и комментарии сделки ----
+function DealComments({ dealId }: { dealId: number }) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const comments = useQuery({ queryKey: ["deal-comments", dealId], queryFn: async () => (await api.get(`/api/deals/${dealId}/comments`)).data as any[] });
+  const files = useQuery({ queryKey: ["deal-files", dealId], queryFn: async () => (await api.get(`/api/deals/${dealId}/files`)).data as any[] });
+  const inv = () => { qc.invalidateQueries({ queryKey: ["deal-comments", dealId] }); qc.invalidateQueries({ queryKey: ["deal-files", dealId] }); };
+  const send = useMutation({ mutationFn: () => api.post(`/api/deals/${dealId}/comments`, { text: text.trim() }), onSuccess: () => { setText(""); inv(); } });
+  const upload = useMutation({ mutationFn: (f: File) => { const fd = new FormData(); fd.append("file", f); return api.post(`/api/deals/${dealId}/files`, fd); }, onSuccess: inv });
+  const delComment = useMutation({ mutationFn: (id: number) => api.delete(`/api/deal-comments/${id}`), onSuccess: inv });
+  const delFile = useMutation({ mutationFn: (id: number) => api.delete(`/api/deal-files/${id}`), onSuccess: inv });
+  const fmtSize = (n: number) => n > 1024 * 1024 ? (n / 1048576).toFixed(1) + " МБ" : Math.max(1, Math.round(n / 1024)) + " КБ";
+  const empty = !(comments.data?.length || files.data?.length);
+
+  return (
+    <div className="card flex flex-col">
+      <h3 className="mb-2 text-sm font-semibold text-slate-700">Файлы и комментарии</h3>
+      <div className="flex-1 space-y-2 overflow-y-auto" style={{ maxHeight: 380 }}>
+        {empty && <div className="py-8 text-center text-xs text-slate-400">Прикрепляйте файлы и оставляйте комментарии для себя и своих коллег</div>}
+        {files.data?.map((f) => (
+          <div key={"f" + f.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-sm">
+            <span className="text-slate-400">📎</span>
+            <button className="flex-1 truncate text-left text-brand hover:underline" title={f.filename} onClick={() => downloadFile(`/api/deal-files/${f.id}/download`, {}, f.filename)}>{f.filename}</button>
+            <span className="text-xs text-slate-400">{fmtSize(f.size)}</span>
+            <button className="text-red-400 hover:text-red-600" onClick={() => delFile.mutate(f.id)}>×</button>
+          </div>
+        ))}
+        {comments.data?.map((c) => (
+          <div key={"c" + c.id} className="group rounded-md bg-slate-50 px-2 py-1.5 text-sm">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>{c.author ?? "—"}</span>
+              <span className="flex items-center gap-2">{c.created_at ? c.created_at.slice(0, 16).replace("T", " ") : ""}
+                <button className="text-red-400 opacity-0 group-hover:opacity-100" onClick={() => delComment.mutate(c.id)}>×</button></span>
+            </div>
+            <div className="whitespace-pre-wrap">{c.text}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-end gap-1 rounded-md border p-1">
+        <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ""; }} />
+        <button type="button" className="px-1 text-lg text-slate-400 hover:text-brand" title="Прикрепить файл" onClick={() => fileRef.current?.click()}>📎</button>
+        <textarea className="min-h-[36px] flex-1 resize-none border-0 text-sm outline-none" placeholder="Написать комментарий" value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (text.trim()) send.mutate(); } }} />
+        <button type="button" className="px-2 text-lg text-brand disabled:text-slate-300" disabled={!text.trim() || send.isPending} title="Отправить" onClick={() => send.mutate()}>➤</button>
+      </div>
     </div>
   );
 }
@@ -509,32 +555,31 @@ function AttachOpsModal({ dealId, companyId, type, attached, accName, partyName,
 
 // ---- Вкладка «Отгрузки/Поставки» ----
 function ShipmentsTab({ dealId, isSale, rows, onSaved, closed }: any) {
-  const [f, setF] = useState({ ship_date: today(), amount: "", cost: "", note: "" });
+  const [f, setF] = useState({ ship_date: today(), amount: "", note: "" });
   const add = useMutation({
-    mutationFn: () => api.post(`/api/deals/${dealId}/shipments`, { ...f, amount: String(f.amount || "0"), cost: String(f.cost || "0") }),
-    onSuccess: () => { setF({ ship_date: today(), amount: "", cost: "", note: "" }); onSaved(); },
+    mutationFn: () => api.post(`/api/deals/${dealId}/shipments`, { ship_date: f.ship_date, amount: String(f.amount || "0"), note: f.note || null }),
+    onSuccess: () => { setF({ ship_date: today(), amount: "", note: "" }); onSaved(); },
   });
   const del = useMutation({ mutationFn: (id: number) => api.delete(`/api/shipments/${id}`), onSuccess: onSaved });
   const word = isSale ? "отгрузок" : "поставок";
   return (
     <div className="space-y-3">
-      <p className="text-sm text-slate-500">{isSale ? "Отгруженные клиенту товары/услуги" : "Полученные от поставщика товары/услуги"}</p>
+      <p className="text-sm text-slate-500">{isSale ? "Отгруженные клиенту товары/услуги на сумму" : "Полученные от поставщика товары/услуги на сумму"}</p>
       <table className="table text-sm">
-        <thead><tr><th>Дата</th><th className="text-right">Сумма</th><th className="text-right">Себестоимость</th><th>Примечание</th><th></th></tr></thead>
+        <thead><tr><th>Дата</th><th className="text-right">Сумма {isSale ? "отгрузки" : "поставки"}</th><th>Примечание</th><th></th></tr></thead>
         <tbody>
           {rows.map((sh: any) => (
-            <tr key={sh.id}><td>{sh.ship_date}</td><td className="text-right">{money(sh.amount)}</td><td className="text-right">{money(sh.cost)}</td>
+            <tr key={sh.id}><td>{sh.ship_date}</td><td className="text-right">{money(sh.amount)}</td>
               <td className="text-slate-500">{sh.note}</td>
               <td className="text-right">{!closed && <button className="text-red-500" onClick={() => del.mutate(sh.id)}>×</button>}</td></tr>
           ))}
-          {rows.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-slate-400">Нет {word}</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-slate-400">Нет {word}</td></tr>}
         </tbody>
       </table>
       {!closed && (
         <form onSubmit={(e) => { e.preventDefault(); if (f.amount) add.mutate(); }} className="flex flex-wrap items-end gap-2">
-          <div><label className="label">Дата</label><input type="date" className="input" value={f.ship_date} onChange={(e) => setF({ ...f, ship_date: e.target.value })} /></div>
-          <div><label className="label">Сумма</label><input type="number" step="0.01" className="input w-32" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></div>
-          <div><label className="label">Себестоимость</label><input type="number" step="0.01" className="input w-32" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} /></div>
+          <div><label className="label">Дата {isSale ? "отгрузки" : "поставки"}</label><input type="date" className="input" value={f.ship_date} onChange={(e) => setF({ ...f, ship_date: e.target.value })} /></div>
+          <div><label className="label">Сумма</label><input type="number" step="0.01" className="input w-36" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></div>
           <div className="flex-1"><label className="label">Примечание</label><input className="input" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></div>
           <button className="btn-primary">Добавить</button>
         </form>

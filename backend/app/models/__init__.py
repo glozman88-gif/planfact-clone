@@ -2,6 +2,7 @@
 from app.models.budgets import Budget, BudgetItem
 from app.models.deals import (
     Deal,
+    DealComment,
     DealItem,
     DealStatus,
     Invoice,
@@ -37,7 +38,7 @@ from app.models.recurring import RecurringOperation
 
 __all__ = [
     "Budget", "BudgetItem",
-    "Deal", "DealStatus", "Invoice", "InvoiceItem", "Product", "ProductGroup", "Shipment",
+    "Deal", "DealComment", "DealItem", "DealStatus", "Invoice", "InvoiceItem", "Product", "ProductGroup", "Shipment",
     "Account", "AccountGroup", "Category", "Counterparty", "CounterpartyGroup",
     "LegalEntity", "Project", "ProjectGroup",
     "AccountKind", "BalanceSection", "CashFlowActivity", "CategoryKind", "CounterpartyKind", "DealKind",
