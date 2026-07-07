@@ -44,6 +44,28 @@ class Deal(Base, TimestampMixin):
     closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
+class DealItem(Base, TimestampMixin):
+    """Позиция сделки (вкладка «Товары и услуги»): что продаём/закупаем по сделке."""
+
+    __tablename__ = "deal_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("deals.id", ondelete="CASCADE"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"))
+    name: Mapped[str] = mapped_column(String(255))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("1"))
+    unit: Mapped[str | None] = mapped_column(String(32), default="шт")
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    discount: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0"))  # скидка, %
+    sort: Mapped[int] = mapped_column(default=0)
+
+    @property
+    def total(self) -> Decimal:
+        return (self.quantity or Decimal("0")) * (self.price or Decimal("0")) * (
+            Decimal("1") - (self.discount or Decimal("0")) / Decimal("100"))
+
+
 class Shipment(Base, TimestampMixin):
     """Отгрузка (для продаж) или поставка (для закупок) — товарный учёт по сделке."""
 

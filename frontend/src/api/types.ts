@@ -163,6 +163,21 @@ export interface DealStatus {
   is_lost: boolean;
 }
 
+export interface Product {
+  id: number;
+  company_id: number;
+  group_id?: number | null;
+  name: string;
+  sku?: string | null;
+  unit?: string | null;
+  price: string;
+  cost: string;
+  is_service: boolean;
+  vat_rate: string;
+  price_includes_vat: boolean;
+  is_archived: boolean;
+}
+
 export interface Budget {
   id: number;
   company_id: number;

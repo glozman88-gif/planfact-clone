@@ -16,6 +16,7 @@ import { Projects } from "./pages/Projects";
 import { Counterparties } from "./pages/Counterparties";
 import { LegalEntities } from "./pages/LegalEntities";
 import { Deals } from "./pages/Deals";
+import { DealCard } from "./pages/DealCard";
 import { RecurringOperations } from "./pages/RecurringOperations";
 import { ImportOperations } from "./pages/ImportOperations";
 import { Settings } from "./pages/Settings";
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="legal-entities" element={<LegalEntities />} />
         <Route path="products" element={<Products />} />
         <Route path="deals" element={<Deals />} />
+        <Route path="deals/:id" element={<DealCard />} />
         <Route path="import" element={<ImportOperations />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />

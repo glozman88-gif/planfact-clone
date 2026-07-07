@@ -2,6 +2,7 @@
 from app.models.budgets import Budget, BudgetItem
 from app.models.deals import (
     Deal,
+    DealItem,
     DealStatus,
     Invoice,
     InvoiceItem,

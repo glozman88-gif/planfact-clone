@@ -60,13 +60,18 @@ def D(x):
     return Decimal(x)
 
 
+def _act_sum(r, side, period):
+    """Σ поступлений/выплат за период по всем видам деятельности (структура ДДС с activities)."""
+    return sum((Decimal(a[side]["by_period"][period]) for a in r["activities"]), Decimal("0"))
+
+
 @pytest.mark.asyncio
 async def test_cashflow(session):
     company = await _setup(session)
     r = await rep.cashflow_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28))
     assert r["periods"] == ["2026-01", "2026-02"]
-    assert D(r["income"]["by_period"]["2026-01"]) == D("500")
-    assert D(r["outcome"]["by_period"]["2026-01"]) == D("200")
+    assert _act_sum(r, "income", "2026-01") == D("500")
+    assert _act_sum(r, "outcome", "2026-01") == D("200")
     assert D(r["net_by_period"]["2026-01"]) == D("300")
     # остаток: 1000 нач + 300 (янв) = 1300 на конец янв, + 300 (фев) = 1600
     assert D(r["opening_balance"]) == D("1000")

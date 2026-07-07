@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { useApp } from "../context/AppContext";
-import type { Account, Category, Counterparty, DealStatus, LegalEntity, Project } from "./types";
+import type { Account, Category, Counterparty, DealStatus, LegalEntity, Product, Project } from "./types";
 
 // Универсальный список справочника, привязанного к компании.
 function useDict<T>(path: string, key: string) {
@@ -19,6 +19,7 @@ export const useProjects = () => useDict<Project>("/api/projects", "projects");
 export const useCounterparties = () => useDict<Counterparty>("/api/counterparties", "counterparties");
 export const useDealStatuses = () => useDict<DealStatus>("/api/deal-statuses", "deal-statuses");
 export const useLegalEntities = () => useDict<LegalEntity>("/api/legal-entities", "legal-entities");
+export const useProducts = () => useDict<Product>("/api/products", "products");
 
 // Универсальные CRUD-мутации для справочника.
 export function useCrud(path: string, key: string) {

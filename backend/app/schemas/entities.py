@@ -345,6 +345,28 @@ class DealOut(ORMModel):
     closed: bool = False
 
 
+class DealItemIn(BaseModel):
+    product_id: int | None = None
+    name: str
+    quantity: Decimal = Decimal("1")
+    unit: str | None = "шт"
+    price: Decimal = Decimal("0")
+    discount: Decimal = Decimal("0")
+
+
+class DealItemOut(ORMModel):
+    id: int
+    company_id: int
+    deal_id: int
+    product_id: int | None
+    name: str
+    quantity: Decimal
+    unit: str | None
+    price: Decimal
+    discount: Decimal
+    total: Decimal
+
+
 class ShipmentIn(BaseModel):
     ship_date: date
     provided_date: date | None = None

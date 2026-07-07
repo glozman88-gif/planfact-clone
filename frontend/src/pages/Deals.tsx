@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
@@ -64,7 +65,7 @@ export function Deals() {
           <tbody>
             {list.data?.map((r) => (
               <tr key={r.id} className="hover:bg-slate-50">
-                <td className="font-medium">{r.name}</td>
+                <td className="font-medium"><Link to={`/deals/${r.id}`} className="text-brand hover:underline">{r.name}</Link></td>
                 <td>{partyName(r.counterparty_id)}</td>
                 <td>{statusName(r.status_id)}</td>
                 <td className="text-right">{fmtNum(r.amount)}</td>
