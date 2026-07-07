@@ -31,8 +31,17 @@ export function Deals() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["deals-calc"] }),
   });
 
-  const statusName = (id?: number | null) => statuses.data?.find((s) => s.id === id)?.name ?? "—";
+  const statusObj = (id?: number | null) => statuses.data?.find((s) => s.id === id);
   const partyName = (id?: number | null) => parties.data?.find((s) => s.id === id)?.name ?? "—";
+  const statusBadge = (id?: number | null) => {
+    const st = statusObj(id);
+    if (!st) return <span className="text-slate-400">—</span>;
+    const cls = st.is_won ? "bg-emerald-100 text-emerald-700"
+      : st.is_lost ? "bg-red-100 text-red-700"
+      : st.name === "В работе" ? "bg-sky-100 text-sky-700"
+      : "bg-amber-100 text-amber-700";
+    return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{st.name}</span>;
+  };
 
   return (
     <div className="space-y-4">
@@ -67,7 +76,7 @@ export function Deals() {
               <tr key={r.id} className="hover:bg-slate-50">
                 <td className="font-medium"><Link to={`/deals/${r.id}`} className="text-brand hover:underline">{r.name}</Link></td>
                 <td>{partyName(r.counterparty_id)}</td>
-                <td>{statusName(r.status_id)}</td>
+                <td>{statusBadge(r.status_id)}</td>
                 <td className="text-right">{fmtNum(r.amount)}</td>
                 <td className="text-right text-emerald-600">{fmtNum(r.received)}</td>
                 <td className="text-right text-sky-600">{fmtNum(r.shipped)}</td>
@@ -147,36 +156,32 @@ function AddDeal({ kind, onClose, onSave, parties }: any) {
     name: "", start_date: new Date().toISOString().slice(0, 10), counterparty_id: "", vat_mode: "with_vat", note: "",
   });
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const Field = ({ label, hint, children }: any) => (
+  // Плоская функция (не вложенный компонент) — иначе инпуты ремоунтятся и теряют фокус на каждом вводе
+  const field = (label: string, control: any, hint?: string) => (
     <div className="grid grid-cols-[150px_1fr] items-start gap-3">
-      <label className="pt-2 text-sm font-medium text-slate-600">{label}{hint && <span className="ml-1 text-slate-300" title={hint}>?</span>}</label>
-      <div>{children}</div>
+      <label className="pt-2 text-sm font-medium text-slate-600">{label}{hint && <span className="ml-1 cursor-help text-slate-300" title={hint}>?</span>}</label>
+      <div>{control}</div>
     </div>
   );
   return (
     <Modal title={isSale ? "Новая продажа" : "Новая закупка"} onClose={onClose} wide>
       <form onSubmit={(e) => { e.preventDefault(); onSave({ name: f.name, kind, start_date: f.start_date || null, counterparty_id: f.counterparty_id || null, vat_mode: f.vat_mode, note: f.note || null }); }} className="space-y-4">
-        <Field label="Название сделки">
-          <input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Например, разработка сайта" required autoFocus />
-        </Field>
-        <Field label="Дата сделки">
-          <input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} />
-        </Field>
-        <Field label={isSale ? "Клиент" : "Поставщик"}>
+        {field("Название сделки",
+          <input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Например, разработка сайта" required />)}
+        {field("Дата сделки",
+          <input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} />)}
+        {field(isSale ? "Клиент" : "Поставщик",
           <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
             <option value="">{isSale ? "Укажите, кому продаёте товар или услугу" : "Укажите, у кого покупаете"}</option>
             {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </Field>
-        <Field label="НДС" hint="Как учитывать НДС в суммах сделки">
+          </select>)}
+        {field("НДС",
           <select className="input" value={f.vat_mode} onChange={(e) => set("vat_mode", e.target.value)}>
             <option value="with_vat">С учётом НДС</option>
             <option value="without_vat">Без НДС</option>
-          </select>
-        </Field>
-        <Field label="Комментарий">
-          <textarea className="input min-h-[80px]" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Ваш комментарий или пояснение к этой сделке" />
-        </Field>
+          </select>, "Как учитывать НДС в суммах сделки")}
+        {field("Комментарий",
+          <textarea className="input min-h-[80px]" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Ваш комментарий или пояснение к этой сделке" />)}
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" className="btn-ghost text-brand" onClick={onClose}>Отменить</button>
           <button className="btn-primary">Создать</button>
