@@ -1,152 +1,180 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, downloadFile, money } from "../api/client";
 import { useApp } from "../context/AppContext";
-import { useCounterparties, useDealStatuses, useProjects } from "../api/hooks";
+import { useCounterparties, useDealStatuses } from "../api/hooks";
 import { Modal } from "../components/Modal";
-import { fmtNum } from "../components/ReportControls";
+
+type Kind = "sale" | "purchase";
+const EMPTY_FILTERS = { status_id: "", counterparty_id: "", date_from: "", date_to: "", sum_from: "", sum_to: "", profit_from: "", profit_to: "" };
 
 export function Deals() {
   const { companyId } = useApp();
   const qc = useQueryClient();
   const statuses = useDealStatuses();
   const parties = useCounterparties();
-  const projects = useProjects();
-  const [kind, setKind] = useState<"sale" | "purchase">("sale");
+  const [kind, setKind] = useState<Kind>("sale");
+  const [method, setMethod] = useState<"calculation" | "cash">("calculation");
   const [adding, setAdding] = useState(false);
-  const [shipDeal, setShipDeal] = useState<any | null>(null);
+  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
+  const setF = (k: string, v: string) => setFilters({ ...filters, [k]: v });
 
   const list = useQuery({
-    queryKey: ["deals-calc", companyId, kind],
+    queryKey: ["deals-calc", companyId, kind, method],
     enabled: !!companyId,
-    queryFn: async () => (await api.get("/api/deals-calc", { params: { company_id: companyId, kind } })).data as any[],
+    queryFn: async () => (await api.get("/api/deals-calc", { params: { company_id: companyId, kind, method } })).data as any[],
   });
   const create = useMutation({
     mutationFn: (body: any) => api.post("/api/deals", body, { params: { company_id: companyId } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["deals-calc"] }); setAdding(false); },
   });
-  const remove = useMutation({
-    mutationFn: (id: number) => api.delete(`/api/deals/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["deals-calc"] }),
-  });
 
-  const statusObj = (id?: number | null) => statuses.data?.find((s) => s.id === id);
   const partyName = (id?: number | null) => parties.data?.find((s) => s.id === id)?.name ?? "—";
+  const statusObj = (id?: number | null) => statuses.data?.find((s) => s.id === id);
   const statusBadge = (id?: number | null) => {
     const st = statusObj(id);
     if (!st) return <span className="text-slate-400">—</span>;
-    const cls = st.is_won ? "bg-emerald-100 text-emerald-700"
-      : st.is_lost ? "bg-red-100 text-red-700"
-      : st.name === "В работе" ? "bg-sky-100 text-sky-700"
-      : "bg-amber-100 text-amber-700";
+    const cls = st.is_won ? "bg-emerald-100 text-emerald-700" : st.is_lost ? "bg-red-100 text-red-700"
+      : st.name === "В работе" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700";
     return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{st.name}</span>;
   };
+  const pctCol = (part: any, whole: any) => { const w = Number(whole); return w > 0 ? Math.round((Number(part) / w) * 100) + "%" : "0%"; };
+
+  // Клиентская фильтрация
+  const rows = (list.data ?? []).filter((r) => {
+    if (filters.status_id && String(r.status_id ?? "") !== filters.status_id) return false;
+    if (filters.counterparty_id && String(r.counterparty_id ?? "") !== filters.counterparty_id) return false;
+    if (filters.date_from && (!r.start_date || r.start_date < filters.date_from)) return false;
+    if (filters.date_to && (!r.start_date || r.start_date > filters.date_to)) return false;
+    if (filters.sum_from && Number(r.amount) < Number(filters.sum_from)) return false;
+    if (filters.sum_to && Number(r.amount) > Number(filters.sum_to)) return false;
+    if (filters.profit_from && Number(r.profit ?? 0) < Number(filters.profit_from)) return false;
+    if (filters.profit_to && Number(r.profit ?? 0) > Number(filters.profit_to)) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!(r.name ?? "").toLowerCase().includes(q) && !partyName(r.counterparty_id).toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+  const totalSum = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+  const totalProfit = rows.reduce((s, r) => s + Number(r.profit || 0), 0);
+  const isSale = kind === "sale";
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Сделки</h1>
-        <button className="btn-primary" onClick={() => setAdding(true)}>+ Добавить сделку</button>
-      </div>
+    <div className="flex gap-4">
+      {/* Панель фильтров */}
+      <aside className="w-60 shrink-0">
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold">Фильтры</h3>
+            <button className="text-xs text-brand hover:underline" onClick={() => { setFilters({ ...EMPTY_FILTERS }); setSearch(""); }}>Сбросить</button>
+          </div>
+          <div>
+            <div className="label">Статус сделки</div>
+            <select className="input" value={filters.status_id} onChange={(e) => setF("status_id", e.target.value)}>
+              <option value="">Все</option>
+              {statuses.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label">{isSale ? "Клиенты" : "Поставщики"}</div>
+            <select className="input" value={filters.counterparty_id} onChange={(e) => setF("counterparty_id", e.target.value)}>
+              <option value="">Все</option>
+              {parties.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label">Дата создания</div>
+            <input type="date" className="input mb-1" value={filters.date_from} onChange={(e) => setF("date_from", e.target.value)} />
+            <input type="date" className="input" value={filters.date_to} onChange={(e) => setF("date_to", e.target.value)} />
+          </div>
+          <div>
+            <div className="label">Сумма сделки</div>
+            <div className="flex items-center gap-1">
+              <input className="input" placeholder="От" value={filters.sum_from} onChange={(e) => setF("sum_from", e.target.value)} />
+              <span className="text-slate-400">—</span>
+              <input className="input" placeholder="до" value={filters.sum_to} onChange={(e) => setF("sum_to", e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <div className="label">Прибыль сделки</div>
+            <div className="flex items-center gap-1">
+              <input className="input" placeholder="От" value={filters.profit_from} onChange={(e) => setF("profit_from", e.target.value)} />
+              <span className="text-slate-400">—</span>
+              <input className="input" placeholder="до" value={filters.profit_to} onChange={(e) => setF("profit_to", e.target.value)} />
+            </div>
+          </div>
+        </div>
+      </aside>
 
-      <div className="flex gap-1 rounded-md bg-slate-100 p-1 w-fit">
-        {([["sale", "Продажи"], ["purchase", "Закупки"]] as const).map(([k, lbl]) => (
-          <button key={k} onClick={() => setKind(k)}
-            className={`rounded px-4 py-1.5 text-sm ${kind === k ? "bg-white font-medium text-brand-dark shadow-sm" : "text-slate-600"}`}>
-            {lbl}
-          </button>
-        ))}
-      </div>
+      {/* Основная часть */}
+      <div className="min-w-0 flex-1 space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold">{isSale ? "Сделки по продажам" : "Сделки по закупкам"}</h1>
+          <button className="btn-primary" onClick={() => setAdding(true)}>Создать</button>
+          <div className="ml-auto flex items-center gap-2">
+            <select className="input !w-48" value={method} onChange={(e) => setMethod(e.target.value as any)} title="Метод учёта">
+              <option value="calculation">Метод начисления</option>
+              <option value="cash">Кассовый метод</option>
+            </select>
+            <button className="btn-ghost flex items-center gap-1" onClick={() => downloadFile("/api/deals-export", { company_id: companyId, kind, method }, "deals.xlsx")}>⭳ .xls</button>
+            <input className="input max-w-xs" placeholder="Поиск по названию или контрагенту" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </div>
 
-      <div className="card overflow-x-auto">
-        <table className="table whitespace-nowrap">
-          <thead>
-            <tr>
-              <th>Название</th><th>{kind === "sale" ? "Клиент" : "Поставщик"}</th><th>Статус</th>
-              <th className="text-right">Сумма сделки</th>
-              <th className="text-right">{kind === "sale" ? "Поступило" : "Выплачено"}</th>
-              <th className="text-right">{kind === "sale" ? "Отгружено" : "Поставлено"}</th>
-              <th className="text-right">Остаток долга</th>
-              <th className="text-right">Прибыль</th><th className="text-right">Рентаб.</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.data?.map((r) => (
-              <tr key={r.id} className="hover:bg-slate-50">
-                <td className="font-medium"><Link to={`/deals/${r.id}`} className="text-brand hover:underline">{r.name}</Link></td>
-                <td>{partyName(r.counterparty_id)}</td>
-                <td>{statusBadge(r.status_id)}</td>
-                <td className="text-right">{fmtNum(r.amount)}</td>
-                <td className="text-right text-emerald-600">{fmtNum(r.received)}</td>
-                <td className="text-right text-sky-600">{fmtNum(r.shipped)}</td>
-                <td className={`text-right ${Number(r.debt) > 0 ? "text-amber-600" : ""}`}>{fmtNum(r.debt)}</td>
-                <td className={`text-right font-medium ${Number(r.profit) < 0 ? "text-red-600" : ""}`}>{fmtNum(r.profit)}</td>
-                <td className="text-right">{r.margin == null ? "—" : r.margin + "%"}</td>
-                <td className="whitespace-nowrap text-right">
-                  <button className="text-brand hover:underline" onClick={() => setShipDeal(r)}>{kind === "sale" ? "отгрузки" : "поставки"}</button>
-                  <button className="ml-2 text-red-500 hover:underline" onClick={() => confirm("Удалить сделку?") && remove.mutate(r.id)}>×</button>
-                </td>
+        <div className="flex gap-1 rounded-md bg-slate-100 p-1 w-fit">
+          {([["sale", "Продажи"], ["purchase", "Закупки"]] as const).map(([k, lbl]) => (
+            <button key={k} onClick={() => setKind(k)}
+              className={`rounded px-4 py-1.5 text-sm ${kind === k ? "bg-white font-medium text-brand-dark shadow-sm" : "text-slate-600"}`}>{lbl}</button>
+          ))}
+        </div>
+
+        <div className="card overflow-x-auto p-0">
+          <table className="table whitespace-nowrap">
+            <thead>
+              <tr>
+                <th>Дата</th><th>Название</th><th>{isSale ? "Клиент" : "Поставщик"}</th><th>Статус</th>
+                <th className="text-right">Сумма сделки</th>
+                <th className="text-right">{isSale ? "Поступило" : "Выплачено"}</th>
+                <th className="text-right">{isSale ? "Отгружено" : "Поставлено"}</th>
+                <th className="text-right">Прибыль</th>
               </tr>
-            ))}
-            {list.data?.length === 0 && <tr><td colSpan={10} className="py-8 text-center text-slate-400">{kind === "sale" ? "Создайте первую сделку продажи" : "Создайте первую сделку закупки"}</td></tr>}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="hover:bg-slate-50">
+                  <td className="text-slate-500">{r.start_date ?? "—"}</td>
+                  <td className="font-medium"><Link to={`/deals/${r.id}`} className="text-brand hover:underline">{r.name}</Link></td>
+                  <td>{partyName(r.counterparty_id)}</td>
+                  <td>{statusBadge(r.status_id)}</td>
+                  <td className="text-right">{money(r.amount)}</td>
+                  <td className="text-right text-emerald-600">{pctCol(r.received, r.amount)}</td>
+                  <td className="text-right text-sky-600">{pctCol(r.shipped, r.amount)}</td>
+                  <td className={`text-right font-medium ${Number(r.profit) < 0 ? "text-red-600" : ""}`}>{r.profit == null ? "—" : money(r.profit)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-slate-400">{list.isLoading ? "Загрузка…" : "Нет сделок по фильтрам"}</td></tr>}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot>
+                <tr className="border-t-2 bg-slate-50 font-medium">
+                  <td colSpan={8} className="px-3 py-2 text-sm">
+                    {rows.length} {isSale ? "продаж" : "закупок"} на сумму: <b>{money(totalSum)}</b>
+                    {isSale && <> · Общая прибыль: <b className={totalProfit < 0 ? "text-red-600" : "text-emerald-700"}>{money(totalProfit)}</b></>}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
       </div>
 
       {adding && (
-        <AddDeal kind={kind} onClose={() => setAdding(false)} onSave={(b) => create.mutate(b)}
-          parties={parties.data ?? []} />
-      )}
-
-      {shipDeal && (
-        <ShipmentsModal deal={shipDeal} kind={kind} onClose={() => { setShipDeal(null); qc.invalidateQueries({ queryKey: ["deals-calc"] }); }} />
+        <AddDeal kind={kind} onClose={() => setAdding(false)} onSave={(b) => create.mutate(b)} parties={parties.data ?? []} />
       )}
     </div>
-  );
-}
-
-function ShipmentsModal({ deal, kind, onClose }: { deal: any; kind: "sale" | "purchase"; onClose: () => void }) {
-  const qc = useQueryClient();
-  const title = kind === "sale" ? "Отгрузки" : "Поставки";
-  const [f, setF] = useState({ ship_date: new Date().toISOString().slice(0, 10), amount: "", cost: "", note: "" });
-
-  const list = useQuery({
-    queryKey: ["shipments", deal.id],
-    queryFn: async () => (await api.get(`/api/deals/${deal.id}/shipments`)).data as any[],
-  });
-  const add = useMutation({
-    mutationFn: () => api.post(`/api/deals/${deal.id}/shipments`, { ...f, amount: String(f.amount || "0"), cost: String(f.cost || "0") }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["shipments", deal.id] }); setF({ ...f, amount: "", cost: "", note: "" }); },
-  });
-  const del = useMutation({
-    mutationFn: (id: number) => api.delete(`/api/shipments/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["shipments", deal.id] }),
-  });
-
-  return (
-    <Modal title={`${title} — ${deal.name}`} onClose={onClose} wide>
-      <table className="table mb-3">
-        <thead><tr><th>Дата</th><th className="text-right">Сумма</th><th className="text-right">Себестоимость</th><th>Примечание</th><th></th></tr></thead>
-        <tbody>
-          {list.data?.map((s) => (
-            <tr key={s.id}>
-              <td>{s.ship_date}</td><td className="text-right">{fmtNum(s.amount)}</td><td className="text-right">{fmtNum(s.cost)}</td>
-              <td className="text-slate-500">{s.note}</td>
-              <td className="text-right"><button className="text-red-500" onClick={() => del.mutate(s.id)}>×</button></td>
-            </tr>
-          ))}
-          {list.data?.length === 0 && <tr><td colSpan={5} className="py-3 text-center text-slate-400">Нет {title.toLowerCase()}</td></tr>}
-        </tbody>
-      </table>
-      <form onSubmit={(e) => { e.preventDefault(); if (f.amount) add.mutate(); }} className="flex items-end gap-2">
-        <div><label className="label">Дата</label><input type="date" className="input" value={f.ship_date} onChange={(e) => setF({ ...f, ship_date: e.target.value })} /></div>
-        <div><label className="label">Сумма</label><input type="number" step="0.01" className="input w-32" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></div>
-        <div><label className="label">Себестоимость</label><input type="number" step="0.01" className="input w-32" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} /></div>
-        <div className="flex-1"><label className="label">Примечание</label><input className="input" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></div>
-        <button className="btn-primary">Добавить</button>
-      </form>
-    </Modal>
   );
 }
 

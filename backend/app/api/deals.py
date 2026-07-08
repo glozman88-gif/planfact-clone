@@ -3,7 +3,7 @@ import os
 import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -11,8 +11,20 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbDep
 from app.core.config import settings
-from app.models import Attachment, Deal, DealComment, DealItem, Invoice, InvoiceItem, Operation, Shipment
+from app.models import (
+    Attachment,
+    Counterparty,
+    Deal,
+    DealComment,
+    DealItem,
+    DealStatus,
+    Invoice,
+    InvoiceItem,
+    Operation,
+    Shipment,
+)
 from app.models.enums import DealKind, OperationStatus, OperationType
+from app.services import export_xlsx as xlsx
 from app.schemas.entities import (
     DealIn,
     DealItemIn,
@@ -34,8 +46,12 @@ async def _sum(db, model_col, *where) -> Decimal:
         select(func.coalesce(func.sum(model_col), 0)).where(*where))).scalar_one()))
 
 
-async def _calc_deal(db, company_id: int, dl: Deal) -> dict:
-    """Расчётные показатели одной сделки (A8/A9): оплачено/отгружено/долг/прибыль/рентабельность."""
+async def _calc_deal(db, company_id: int, dl: Deal, method_override: str | None = None) -> dict:
+    """Расчётные показатели одной сделки (A8/A9): оплачено/отгружено/долг/прибыль/рентабельность.
+
+    method_override — переключатель метода учёта на уровне списка (Метод начисления / Кассовый),
+    перекрывает метод самой сделки.
+    """
     is_sale = dl.kind == DealKind.sale
     flow_type = OperationType.income if is_sale else OperationType.outcome
     paid = await _sum(db, Operation.amount,
@@ -50,7 +66,7 @@ async def _calc_deal(db, company_id: int, dl: Deal) -> dict:
                                 Operation.company_id == company_id, Operation.deal_id == dl.id,
                                 Operation.type == OperationType.outcome,
                                 Operation.status == OperationStatus.committed)
-    method = (dl.accounting_method or "calculation").lower()
+    method = (method_override or dl.accounting_method or "calculation").lower()
     deal_value = max(dl.amount, paid, provided)
     if is_sale:
         income = paid if method == "cash" else provided
@@ -87,14 +103,14 @@ async def _calc_deal(db, company_id: int, dl: Deal) -> dict:
 
 
 @router.get("/api/deals-calc")
-async def deals_calc(db: DbDep, _: CurrentUser, company_id: int = Query(...), kind: DealKind | None = None):
+async def deals_calc(db: DbDep, _: CurrentUser, company_id: int = Query(...),
+                     kind: DealKind | None = None, method: str | None = None):
     """Сделки с расчётными показателями (A8/A9).
 
+    method — метод учёта для всего списка (calculation/cash), перекрывает метод сделок.
     paid_value     — Σ подтверждённых оплат по сделке (Income для продажи / Outcome для закупки);
     provided_value — Σ подтверждённых отгрузок/поставок (is_calculation_committed);
     deal_value     — max(сумма сделки, оплачено, отгружено);
-    метод calculation: income=provided_value, outcome=себестоимость отгруженного;
-    метод cash:        income=paid_value;
     profit/profitability — только для продаж (purchase → null);
     долг = paid − shipped с классификацией денежный/неденежный.
     """
@@ -102,7 +118,31 @@ async def deals_calc(db: DbDep, _: CurrentUser, company_id: int = Query(...), ki
     if kind:
         conds.append(Deal.kind == kind)
     deals = (await db.execute(select(Deal).where(*conds).order_by(Deal.id.desc()))).scalars().all()
-    return [await _calc_deal(db, company_id, dl) for dl in deals]
+    return [await _calc_deal(db, company_id, dl, method_override=method) for dl in deals]
+
+
+@router.get("/api/deals-export")
+async def deals_export(db: DbDep, _: CurrentUser, company_id: int = Query(...),
+                       kind: DealKind | None = None, method: str | None = None):
+    """Экспорт списка сделок в Excel (те же данные, что deals-calc)."""
+    data = await deals_calc(db, _, company_id=company_id, kind=kind, method=method)
+    parties = {p.id: p.name for p in (await db.execute(
+        select(Counterparty).where(Counterparty.company_id == company_id))).scalars()}
+    statuses = {s.id: s.name for s in (await db.execute(
+        select(DealStatus).where(DealStatus.company_id == company_id))).scalars()}
+    rows = [{
+        "date": d["start_date"], "name": d["name"],
+        "client": parties.get(d["counterparty_id"], ""), "status": statuses.get(d["status_id"], ""),
+        "amount": d["amount"], "received": d["received"], "shipped": d["shipped"],
+        "debt": d["debt"], "profit": d["profit"], "margin": d["margin"],
+    } for d in data]
+    title = "Закупки" if kind == DealKind.purchase else "Продажи"
+    payload = xlsx.deals_xlsx(rows, f"Сделки — {title}")
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="deals.xlsx"'},
+    )
 
 
 @router.get("/api/deals/{deal_id}/shipments", response_model=list[ShipmentOut], tags=["deals"])

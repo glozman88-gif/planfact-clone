@@ -223,6 +223,30 @@ OPERATIONS_COLUMNS = [
 ]
 
 
+DEALS_COLUMNS = ["Дата", "Название", "Клиент", "Статус", "Сумма сделки", "Поступило",
+                 "Отгружено", "Остаток долга", "Прибыль", "Рентаб., %"]
+
+
+def deals_xlsx(rows: list[dict], title: str) -> bytes:
+    """rows — словари с ключами date/name/client/status/amount/received/shipped/debt/profit/margin."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]
+    _header_row(ws, 1, DEALS_COLUMNS)
+    for ri, r in enumerate(rows, start=2):
+        ws.cell(row=ri, column=1, value=r.get("date") or "")
+        ws.cell(row=ri, column=2, value=r.get("name") or "")
+        ws.cell(row=ri, column=3, value=r.get("client") or "")
+        ws.cell(row=ri, column=4, value=r.get("status") or "")
+        for col, key in [(5, "amount"), (6, "received"), (7, "shipped"), (8, "debt"), (9, "profit")]:
+            _money_cell(ws, ri, col, r.get(key))
+        m = r.get("margin")
+        ws.cell(row=ri, column=10, value=(f"{m}%" if m is not None else "—")).alignment = RIGHT
+    ws.freeze_panes = "A2"
+    _autosize(ws, {1: 12, 2: 30, 3: 24, 4: 16, 5: 15, 6: 14, 7: 14, 8: 15, 9: 14, 10: 12})
+    return _save(wb)
+
+
 def operations_xlsx(rows: list[dict]) -> bytes:
     """rows — список словарей с ключами столбцов OPERATIONS_COLUMNS (кроме «Сумма» — число)."""
     wb = Workbook()
