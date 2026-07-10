@@ -1,7 +1,8 @@
 """Пользователи, компании, валюты и курсы."""
+import json
 from datetime import date
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base, TimestampMixin
@@ -33,6 +34,15 @@ class Company(Base, TimestampMixin):
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     # Закрытие периода: операции с датой <= этой запрещено создавать/менять/удалять
     period_locked_until: Mapped[date | None] = mapped_column(Date)
+    # UI-настройки компании (тумблеры отображения) — JSON-строка
+    ui_settings: Mapped[str | None] = mapped_column(Text)
+
+    @property
+    def settings(self) -> dict:
+        try:
+            return json.loads(self.ui_settings) if self.ui_settings else {}
+        except (ValueError, TypeError):
+            return {}
 
 
 class Currency(Base):

@@ -31,6 +31,7 @@ class CompanyOut(ORMModel):
     base_currency: str
     is_archived: bool
     period_locked_until: date | None = None
+    settings: dict = {}
 
 
 # ---------- Счета ----------

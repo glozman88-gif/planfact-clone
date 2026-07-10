@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { api } from "../api/client";
+import { api, setMoneyKopecks } from "../api/client";
 import type { Company, User } from "../api/types";
 
 interface AppState {
@@ -40,6 +40,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("token");
     location.href = "/login";
   }
+
+  // Применяем UI-настройки текущей компании (отображение копеек)
+  useEffect(() => {
+    const cur = companies.find((c) => c.id === companyId);
+    setMoneyKopecks(cur?.settings?.show_kopecks !== false);
+  }, [companies, companyId]);
 
   useEffect(() => {
     (async () => {

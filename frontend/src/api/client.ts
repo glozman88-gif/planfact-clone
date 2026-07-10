@@ -23,10 +23,14 @@ api.interceptors.response.use(
   }
 );
 
+// Настройка отображения копеек (управляется из настроек компании)
+let SHOW_KOPECKS = true;
+export function setMoneyKopecks(v: boolean) { SHOW_KOPECKS = v; }
+
 // Хелпер форматирования денег
 export function money(value: string | number | null | undefined, currency = "₽"): string {
   const n = Number(value ?? 0);
-  return n.toLocaleString("ru-RU", { maximumFractionDigits: 2, minimumFractionDigits: 0 }) + " " + currency;
+  return n.toLocaleString("ru-RU", { maximumFractionDigits: SHOW_KOPECKS ? 2 : 0, minimumFractionDigits: 0 }) + " " + currency;
 }
 
 // Скачивание файла из защищённого эндпойнта (с Bearer-токеном). Имя берём из

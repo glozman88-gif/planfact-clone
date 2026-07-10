@@ -17,6 +17,7 @@ export interface Company {
   base_currency: string;
   is_archived: boolean;
   period_locked_until?: string | null;
+  settings?: Record<string, any>;
 }
 
 export interface LegalEntity {

@@ -1,4 +1,5 @@
 """Компании + быстрое заведение справочников по умолчанию."""
+import json
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
@@ -63,6 +64,18 @@ async def set_period_lock(
     if company is None:
         raise HTTPException(404, "Компания не найдена")
     company.period_locked_until = locked_until
+    await db.commit()
+    await db.refresh(company)
+    return company
+
+
+@router.put("/{company_id}/settings", response_model=CompanyOut)
+async def update_settings(company_id: int, payload: dict, db: DbDep, _: CurrentUser):
+    """Сохранить UI-настройки компании (тумблеры отображения)."""
+    company = await db.get(Company, company_id)
+    if company is None:
+        raise HTTPException(404, "Компания не найдена")
+    company.ui_settings = json.dumps(payload, ensure_ascii=False)
     await db.commit()
     await db.refresh(company)
     return company

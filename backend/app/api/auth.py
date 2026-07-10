@@ -27,6 +27,13 @@ async def me(current: CurrentUser):
     return current
 
 
+@router.get("/users", response_model=list[UserOut])
+async def list_users(db: DbDep, current: CurrentUser):
+    if not current.is_admin:
+        raise HTTPException(403, "Только администратор может смотреть пользователей")
+    return (await db.execute(select(User).order_by(User.id))).scalars().all()
+
+
 @router.post("/users", response_model=UserOut, status_code=201)
 async def create_user(payload: UserCreate, db: DbDep, current: CurrentUser):
     if not current.is_admin:
