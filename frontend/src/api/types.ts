@@ -41,6 +41,7 @@ export interface Account {
   currency_code: string;
   opening_balance: string;
   exclude_from_totals: boolean;
+  is_undistributed?: boolean;
   is_archived: boolean;
 }
 

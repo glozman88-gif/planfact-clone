@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { Sparkline } from "./Sparkline";
+import { BalancesPanel } from "./BalancesPanel";
 import type { AccountBalance, Dashboard } from "../api/types";
 
 // Иконки разделов (минималистичные line-icon)
@@ -69,6 +71,7 @@ const NAV: NavGroup[] = [
 
 export function Layout() {
   const { user, companies, companyId, setCompanyId, logout } = useApp();
+  const [balOpen, setBalOpen] = useState(false);
 
   const balances = useQuery({
     queryKey: ["balances", companyId],
@@ -139,12 +142,20 @@ export function Layout() {
               {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <div className="text-xs text-slate-400">На счетах</div>
+          <div className="relative flex items-center gap-3">
+            <button className="text-right hover:opacity-90" onClick={() => setBalOpen((v) => !v)} title="Остатки по счетам">
+              <div className="text-xs text-slate-400">На счетах ▾</div>
               <div className="font-semibold text-white">{money(total)}</div>
-            </div>
+            </button>
             <Sparkline values={trend} color="#16b1bf" width={80} height={28} />
+            {balOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setBalOpen(false)} />
+                <div className="absolute left-0 top-full z-50 mt-2">
+                  <BalancesPanel />
+                </div>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-slate-300">{user?.email}</span>
