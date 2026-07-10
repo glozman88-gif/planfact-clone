@@ -27,7 +27,7 @@ export function Operations() {
   const legalEntities = useLegalEntities();
 
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
-  const [filters, setFilters] = useState({ date_from: "", date_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "" });
+  const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "" });
   const [editing, setEditing] = useState<Partial<Operation> | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkEditing, setBulkEditing] = useState(false);
@@ -44,6 +44,8 @@ export function Operations() {
           account_id: filters.account_id || undefined, category_id: filters.category_id || undefined,
           project_id: filters.project_id || undefined, counterparty_id: filters.counterparty_id || undefined,
           legal_entity_id: filters.legal_entity_id || undefined,
+          status: filters.status || undefined,
+          amount_from: filters.amount_from || undefined, amount_to: filters.amount_to || undefined,
           search: filters.search || undefined,
         },
       })).data,
@@ -129,6 +131,22 @@ export function Operations() {
             <input type="date" className="input mb-1" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} />
             <input type="date" className="input" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} />
           </div>
+          <div>
+            <div className="label">Статус</div>
+            <select className="input" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+              <option value="">Все</option>
+              <option value="committed">Проведённые (факт)</option>
+              <option value="planned">Плановые</option>
+            </select>
+          </div>
+          <div>
+            <div className="label">Сумма</div>
+            <div className="flex items-center gap-1">
+              <input className="input" placeholder="От" value={filters.amount_from} onChange={(e) => setFilters({ ...filters, amount_from: e.target.value })} />
+              <span className="text-slate-400">—</span>
+              <input className="input" placeholder="до" value={filters.amount_to} onChange={(e) => setFilters({ ...filters, amount_to: e.target.value })} />
+            </div>
+          </div>
           {(legalEntities.data?.length ?? 0) > 0 && (
             <Sel label="Юрлицо" value={filters.legal_entity_id} onChange={(v) => setFilters({ ...filters, legal_entity_id: v })} options={legalEntities.data} />
           )}
@@ -152,7 +170,8 @@ export function Operations() {
               date_from: filters.date_from, date_to: filters.date_to,
               account_id: filters.account_id, category_id: filters.category_id,
               project_id: filters.project_id, counterparty_id: filters.counterparty_id,
-              legal_entity_id: filters.legal_entity_id,
+              legal_entity_id: filters.legal_entity_id, status: filters.status,
+              amount_from: filters.amount_from, amount_to: filters.amount_to,
               search: filters.search,
             }}
             filename="operations.xlsx"

@@ -122,9 +122,13 @@ async def _legal_entity_account_ids(db, company_id: int, legal_entity_id: int) -
 
 def _op_conds(company_id, date_from, date_to, type, types, status,
               account_id, category_id, project_id, counterparty_id, deal_id, search,
-              account_ids=None):
+              account_ids=None, amount_from=None, amount_to=None):
     """Условия выборки операций — общие для списка и экспорта."""
     conds = [Operation.company_id == company_id]
+    if amount_from not in (None, ""):
+        conds.append(Operation.amount >= Decimal(str(amount_from)))
+    if amount_to not in (None, ""):
+        conds.append(Operation.amount <= Decimal(str(amount_to)))
     if account_ids is not None:
         # фильтр по юрлицу: операции по счетам юрлица (источник или получатель)
         conds.append(Operation.account_id.in_(account_ids) | Operation.to_account_id.in_(account_ids))
@@ -171,6 +175,8 @@ async def list_operations(
     counterparty_id: int | None = None,
     deal_id: int | None = None,
     legal_entity_id: int | None = None,
+    amount_from: Decimal | None = None,
+    amount_to: Decimal | None = None,
     search: str | None = None,
     limit: int = Query(100, le=1000),
     offset: int = 0,
@@ -178,7 +184,7 @@ async def list_operations(
     account_ids = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
     conds = _op_conds(company_id, date_from, date_to, type, types, status,
                       account_id, category_id, project_id, counterparty_id, deal_id, search,
-                      account_ids=account_ids)
+                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to)
 
     total = (await db.execute(select(func.count()).select_from(Operation).where(*conds))).scalar_one()
 
@@ -380,13 +386,15 @@ async def export_operations(
     counterparty_id: int | None = None,
     deal_id: int | None = None,
     legal_entity_id: int | None = None,
+    amount_from: Decimal | None = None,
+    amount_to: Decimal | None = None,
     search: str | None = None,
 ):
     """Экспорт операций (по тем же фильтрам, что и список) в Excel."""
     account_ids = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
     conds = _op_conds(company_id, date_from, date_to, type, types, status,
                       account_id, category_id, project_id, counterparty_id, deal_id, search,
-                      account_ids=account_ids)
+                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to)
     ops = (await db.execute(
         select(Operation).where(*conds).order_by(Operation.op_date.desc(), Operation.id.desc())
     )).scalars().all()
