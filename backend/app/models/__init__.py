@@ -31,7 +31,7 @@ from app.models.enums import (
     OperationStatus,
     OperationType,
 )
-from app.models.misc import Attachment, AuditLog, ImportLog, ImportRule, QuickFilter
+from app.models.misc import Attachment, AuditLog, BankConnection, ImportLog, ImportRule, QuickFilter
 from app.models.operations import Operation, OperationItem
 from app.models.org import Company, Currency, ExchangeRate, User
 from app.models.recurring import RecurringOperation
@@ -43,7 +43,7 @@ __all__ = [
     "LegalEntity", "Project", "ProjectGroup",
     "AccountKind", "BalanceSection", "CashFlowActivity", "CategoryKind", "CounterpartyKind", "DealKind",
     "OperationStatus", "OperationType",
-    "Attachment", "AuditLog", "ImportLog", "ImportRule", "QuickFilter",
+    "Attachment", "AuditLog", "BankConnection", "ImportLog", "ImportRule", "QuickFilter",
     "Operation", "OperationItem",
     "Company", "Currency", "ExchangeRate", "User",
     "RecurringOperation",

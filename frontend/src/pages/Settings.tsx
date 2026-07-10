@@ -29,6 +29,8 @@ export function Settings() {
             </button>
           ))}
           <div className="my-1 border-t" />
+          <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-400">Интеграции</div>
+          <Link to="/bank-integration" className="block rounded-md px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">Банки и карты</Link>
           <Link to="/import" className="block rounded-md px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">Импорт и правила</Link>
         </div>
       </aside>

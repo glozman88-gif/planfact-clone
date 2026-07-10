@@ -19,6 +19,7 @@ import { Deals } from "./pages/Deals";
 import { DealCard } from "./pages/DealCard";
 import { RecurringOperations } from "./pages/RecurringOperations";
 import { ImportOperations } from "./pages/ImportOperations";
+import { BankIntegration } from "./pages/BankIntegration";
 import { Settings } from "./pages/Settings";
 
 export default function App() {
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="deals" element={<Deals />} />
         <Route path="deals/:id" element={<DealCard />} />
         <Route path="import" element={<ImportOperations />} />
+        <Route path="bank-integration" element={<BankIntegration />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

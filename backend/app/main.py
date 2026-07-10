@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-from app.api import auth, budgets, companies, deals, dictionaries, imports, operations, recurring, reports
+from app.api import auth, budgets, companies, deals, dictionaries, imports, integrations, operations, recurring, reports
 from app.core.config import settings
 
 app = FastAPI(title="ПланФакт-аналог", version="0.1.0")
@@ -29,6 +29,7 @@ app.include_router(budgets.router)
 app.include_router(reports.router)
 app.include_router(imports.router)
 app.include_router(recurring.router)
+app.include_router(integrations.router)
 
 
 @app.get("/api/health", tags=["system"])

@@ -75,3 +75,21 @@ class ImportRule(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255))
     mapping: Mapped[str] = mapped_column(Text)  # JSON {field_key: column_index|null}
     options: Mapped[str | None] = mapped_column(Text)  # JSON {has_header, default_account_id, ...}
+
+
+class BankConnection(Base, TimestampMixin):
+    """Подключение к API банка (токен или OAuth-приложение).
+
+    ВНИМАНИЕ: токены/секреты хранятся как есть — в продакшене их следует шифровать.
+    """
+
+    __tablename__ = "bank_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    bank: Mapped[str] = mapped_column(String(32))          # slug: tochka|tbank|modulbank|sber|alfa|blank|zenmoney
+    method: Mapped[str] = mapped_column(String(16))        # token | oauth
+    status: Mapped[str] = mapped_column(String(24), default="connected")  # connected|pending|disconnected
+    token: Mapped[str | None] = mapped_column(Text)        # API-токен (для method=token) или access_token (oauth)
+    client_id: Mapped[str | None] = mapped_column(String(255))
+    client_secret: Mapped[str | None] = mapped_column(String(512))
