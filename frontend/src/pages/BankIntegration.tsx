@@ -310,12 +310,13 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
         }
       }
       if (firstAcc) await api.put(`/api/bank-connections/${c.id}`, { ...connBody, account_id: firstAcc });
-      // 3) T-Bank: сразу выгружаем операции по API в предпросмотр
+      // 3) Токен-банк: пере-синхронизация (выгрузка операций + сверка остатков с банком)
       if (isTokenBank) {
-        const ops = (await api.post(`/api/banks/${bank.slug}/operations`, {
-          token: token.trim(), accounts: selectedNums, date_from: periodFrom(), date_till: new Date().toISOString().slice(0, 10),
-        }, { params: { company_id: companyId } })).data;
-        setDetect(ops);
+        const res = (await api.post(`/api/banks/${bank.slug}/resync`, {}, { params: { company_id: companyId, connection_id: c.id, date_from: periodFrom() } })).data;
+        onDone();
+        const newAccts = finalDec.length;
+        setAutoResult({ operations: { loaded: res.operations, total: res.operations }, counterparties: { new: 0, existing: 0 }, accounts: { new: newAccts, existing: 0 }, entities: { new: 0, existing: legalEntityId ? 1 : 0 } });
+        return;
       }
       onDone();
       setConnected({ decisions: finalDec, connId: c.id });
@@ -514,12 +515,13 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const isTokenBank = TOKEN_BANKS.has(bank.slug);
-  // Токен-банк: тянем операции по API (по сохранённому токену и счетам подключения)
+  const [syncRes, setSyncRes] = useState<any>(null);
+  // Токен-банк: пере-синхронизация по API (замена + сверка остатков, без дублей)
   useEffect(() => {
     if (!isTokenBank) return;
     setBusy(true);
-    api.post(`/api/banks/${bank.slug}/operations`, { connection_id: conn.id, date_from: `${new Date().getFullYear()}-01-01`, date_till: new Date().toISOString().slice(0, 10) }, { params: { company_id: companyId } })
-      .then((r) => setDetect(r.data)).catch((e) => setErr(e?.response?.data?.detail || "Не удалось выгрузить операции")).finally(() => setBusy(false));
+    api.post(`/api/banks/${bank.slug}/resync`, {}, { params: { company_id: companyId, connection_id: conn.id } })
+      .then((r) => setSyncRes(r.data)).catch((e) => setErr(e?.response?.data?.detail || "Не удалось синхронизировать")).finally(() => setBusy(false));
   }, []);
   const onFile = async (file: File) => {
     setBusy(true);
@@ -537,8 +539,15 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
         <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-semibold">Получить новые операции — {bank.name}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button></div>
         {isTokenBank ? (
-          <div className="py-8 text-center text-sm text-slate-500">
-            {err ? <span className="text-red-600">{err}</span> : "Выгружаем свежие операции из Т-Банка…"}
+          <div className="py-6 text-center text-sm">
+            {err ? <span className="text-red-600">{err}</span>
+              : syncRes ? (
+                <div className="space-y-3">
+                  <div className="text-emerald-600">✓ Синхронизировано с {bank.name}</div>
+                  <div className="text-slate-600">Загружено операций: <b>{syncRes.operations}</b>. Остатки сверены с банком по {syncRes.accounts_reconciled} счетам.</div>
+                  <button className="btn-primary" onClick={() => { onDone(); onClose(); }}>Готово</button>
+                </div>
+              ) : "Синхронизируем операции и сверяем остатки…"}
           </div>
         ) : (
         <label className="flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed border-slate-200 py-8 text-sm text-slate-500 hover:border-brand">

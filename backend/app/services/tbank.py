@@ -65,10 +65,13 @@ def normalize_operations(statement: dict, own_accounts: set[str]) -> list[dict]:
         amount = op.get("amount") or 0
         if not amount:
             continue
-        if recip == acc and payer in own and payer != acc:
-            otype, cp = "move", None
-        elif payer == acc and recip in own and recip != acc:
-            otype, cp = "move", None
+        to_account = None
+        if payer == acc and recip in own and recip != acc:
+            # перемещение между своими счетами — пишем ОДИН раз со стороны отправителя
+            otype, cp, to_account = "move", None, recip
+        elif recip == acc and payer in own and payer != acc:
+            # входящая нога перемещения — учтётся из выписки отправителя, пропускаем (не задваиваем)
+            continue
         elif recip == acc:
             otype, cp = "income", op.get("payerName")
         elif payer == acc:
@@ -83,7 +86,7 @@ def normalize_operations(statement: dict, own_accounts: set[str]) -> list[dict]:
             "type": otype,
             "amount": str(amount),
             "account": acc,
-            "to_account": None,
+            "to_account": to_account,
             "counterparty": (cp or "").strip() or None,
             "description": op.get("paymentPurpose") or None,
         })

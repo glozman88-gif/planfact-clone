@@ -5,20 +5,23 @@
 OAuth-партнёркой (Сбер, Альфа) используется отдельный флоу авторизации (bank_oauth).
 """
 import httpx
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from app.api.deps import CurrentUser, DbDep
 from app.api.imports_bank import _digits
 from app.api.rules import load_rules
 from app.api.tbank import _public_ip
-from app.models import Account, BankAccountMap, BankConnection, Counterparty
+from app.models import Account, BankAccountMap, BankConnection, Counterparty, Operation
+from app.models.enums import OperationStatus, OperationType
 from app.services import tbank, tochka
+from app.services.currency import to_base_amount
 from app.services.dist_rules import apply_rules
+from app.services.import_ops import parse_date
 
 router = APIRouter(prefix="/api/banks", tags=["integrations"])
 
@@ -146,6 +149,106 @@ async def _client_operations(slug: str, token: str, nums: list[str], d_from: str
             except Exception:
                 continue
     return rows
+
+
+async def _bank_balances(slug: str, token: str) -> dict[str, float]:
+    """Текущие остатки банка по номеру счёта (для сверки opening_balance)."""
+    cl = _client(slug)
+    try:
+        return {a["account_number"]: (a.get("balance") or 0) for a in await cl.get_accounts(token)}
+    except Exception:
+        return {}
+
+
+@router.post("/{slug}/resync")
+async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Query(...),
+                 company_id: int = Query(...), date_from: str | None = None):
+    """Пере-синхронизация: заменить операции по счетам подключения свежими из банка и
+    выставить начальные остатки так, чтобы остаток счёта совпал с реальным в банке.
+
+    Исправляет задвоенные перемещения/дубли и нулевой начальный остаток.
+    """
+    conn = await db.get(BankConnection, connection_id)
+    if conn is None or not conn.token:
+        raise HTTPException(400, "Нет подключения или токена")
+    maps = (await db.execute(select(BankAccountMap).where(
+        BankAccountMap.connection_id == connection_id))).scalars().all()
+    num_to_acc = {m.bank_account: m.account_id for m in maps if m.account_id}
+    app_ids = set(num_to_acc.values())
+    if not app_ids:
+        raise HTTPException(400, "Нет сопоставленных счетов")
+
+    d_from = date_from or "2023-06-01"
+    d_till = date.today().isoformat()
+    nums = list(num_to_acc.keys())
+    rows = await _client_operations(slug, conn.token, nums, d_from, d_till)
+    balances = await _bank_balances(slug, conn.token)
+
+    # авто-распределение по правилам + сопоставление контрагентов
+    parties = {p.name.strip().lower(): p for p in (await db.execute(
+        select(Counterparty).where(Counterparty.company_id == company_id))).scalars()}
+    for r in rows:
+        p = parties.get((r.get("counterparty") or "").strip().lower())
+        r["counterparty_id"] = p.id if p else None
+        r["category_id"] = None
+        r["project_id"] = None
+    apply_rules(rows, await load_rules(db, company_id, "bank"))
+
+    # 1) удалить прежние операции по этим счетам (чистый лист)
+    await db.execute(delete(Operation).where(
+        Operation.company_id == company_id,
+        or_(Operation.account_id.in_(app_ids), Operation.to_account_id.in_(app_ids))))
+
+    # 2) создать операции заново (дедуп по счёт+дата+сумма+тип+назначение)
+    seen: set = set()
+    net: dict[int, Decimal] = {aid: Decimal("0") for aid in app_ids}
+    created = 0
+    for r in rows:
+        d = parse_date(r["op_date"])
+        amt = Decimal(r["amount"])
+        if d is None or amt == 0:
+            continue
+        acc_id = num_to_acc.get(r.get("account"))
+        to_id = num_to_acc.get(r.get("to_account")) if r.get("to_account") else None
+        sig = (acc_id, to_id, r["op_date"], str(amt), r["type"], (r.get("description") or "")[:40])
+        if sig in seen:
+            continue
+        seen.add(sig)
+        if r["type"] == "move":
+            op = Operation(company_id=company_id, type=OperationType.move, status=OperationStatus.committed,
+                           op_date=d, account_id=acc_id, to_account_id=to_id, amount=amt,
+                           currency_code="RUB", category_id=r.get("category_id"),
+                           project_id=r.get("project_id"), description=r.get("description"))
+            if acc_id in net:
+                net[acc_id] -= amt
+            if to_id in net:
+                net[to_id] += amt
+        else:
+            otype = OperationType.income if r["type"] == "income" else OperationType.outcome
+            op = Operation(company_id=company_id, type=otype, status=OperationStatus.committed,
+                           op_date=d, account_id=acc_id, amount=amt, currency_code="RUB",
+                           counterparty_id=r.get("counterparty_id"), category_id=r.get("category_id"),
+                           project_id=r.get("project_id"), description=r.get("description"))
+            if acc_id in net:
+                net[acc_id] += amt if otype == OperationType.income else -amt
+        op.base_amount = await to_base_amount(db, company_id, amt, "RUB", d)
+        db.add(op)
+        created += 1
+
+    # 3) сверка: opening_balance = текущий остаток банка − движение по операциям
+    reconciled = 0
+    for num, aid in num_to_acc.items():
+        bal = balances.get(num)
+        if bal is None:
+            continue
+        acc = await db.get(Account, aid)
+        if acc is not None:
+            acc.opening_balance = (Decimal(str(bal)) - net.get(aid, Decimal("0"))).quantize(Decimal("0.01"))
+            reconciled += 1
+
+    conn.last_sync_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"operations": created, "accounts_reconciled": reconciled}
 
 
 @router.post("/{slug}/operations")
