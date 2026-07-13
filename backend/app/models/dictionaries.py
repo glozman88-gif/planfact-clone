@@ -38,6 +38,14 @@ class LegalEntity(Base, TimestampMixin):
     ogrn: Mapped[str | None] = mapped_column(String(20))
     address: Mapped[str | None] = mapped_column(String(512))
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Банковские реквизиты (для печатной формы счёта)
+    bank_name: Mapped[str | None] = mapped_column(String(255))
+    settlement_account: Mapped[str | None] = mapped_column(String(34))   # расчётный счёт (Р/с)
+    bik: Mapped[str | None] = mapped_column(String(12))
+    corr_account: Mapped[str | None] = mapped_column(String(34))         # корр. счёт (К/с)
+    # Подписанты по умолчанию
+    director_name: Mapped[str | None] = mapped_column(String(255))
+    accountant_name: Mapped[str | None] = mapped_column(String(255))
 
 
 class Account(Base, TimestampMixin):
@@ -134,6 +142,8 @@ class Counterparty(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255))
     kind: Mapped[CounterpartyKind] = mapped_column(Enum(CounterpartyKind), default=CounterpartyKind.company)
     inn: Mapped[str | None] = mapped_column(String(20))
+    kpp: Mapped[str | None] = mapped_column(String(20))
+    address: Mapped[str | None] = mapped_column(String(512))
     phone: Mapped[str | None] = mapped_column(String(64))
     email: Mapped[str | None] = mapped_column(String(255))
     note: Mapped[str | None] = mapped_column(String(1000))

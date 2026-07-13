@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUser, DbDep
 from app.core.config import settings
 from app.models import (
+    Account,
     Attachment,
     Counterparty,
     Deal,
@@ -20,9 +21,11 @@ from app.models import (
     DealStatus,
     Invoice,
     InvoiceItem,
+    LegalEntity,
     Operation,
     Shipment,
 )
+from app.services.rubles import rubles_in_words
 from app.models.enums import DealKind, OperationStatus, OperationType
 from app.services import export_xlsx as xlsx
 from app.schemas.entities import (
@@ -407,3 +410,69 @@ async def delete_invoice(invoice_id: int, db: DbDep, _: CurrentUser):
         raise HTTPException(404, "Счёт не найден")
     await db.delete(inv)
     await db.commit()
+
+
+@router.get("/api/invoices/{invoice_id}/print")
+async def invoice_print(invoice_id: int, db: DbDep, _: CurrentUser):
+    """Данные печатной формы «Счёт на оплату»: реквизиты поставщика/покупателя, позиции, НДС,
+    итоги и сумма прописью."""
+    inv = await db.get(Invoice, invoice_id, options=[selectinload(Invoice.items)])
+    if inv is None:
+        raise HTTPException(404, "Счёт не найден")
+    le = await db.get(LegalEntity, inv.legal_entity_id) if inv.legal_entity_id else None
+    cp = await db.get(Counterparty, inv.counterparty_id) if inv.counterparty_id else None
+    acc = await db.get(Account, inv.account_id) if inv.account_id else None
+
+    q2 = Decimal("0.01")
+    items, total, vat = [], Decimal("0"), Decimal("0")
+    for i, it in enumerate(inv.items, start=1):
+        line = it.line_total
+        vr = it.vat_rate or Decimal("0")
+        if vr > 0:
+            v = (line * vr / (100 + vr)) if inv.vat_included else (line * vr / 100)
+            vat += v.quantize(q2)
+        total += line
+        items.append({
+            "n": i, "name": it.name, "unit": it.unit or "шт.",
+            "quantity": str(it.quantity), "price": str(it.price),
+            "discount": str(it.discount or 0), "vat_rate": str(vr),
+            "amount": str(line),
+        })
+    total = total.quantize(q2)
+    total_with_vat = total if inv.vat_included else (total + vat).quantize(q2)
+    has_vat = vat > 0
+
+    def _le(field, default=None):
+        return getattr(le, field, None) if le else default
+
+    return {
+        "number": inv.number,
+        "date": inv.invoice_date.isoformat() if inv.invoice_date else None,
+        "due_date": inv.due_date.isoformat() if inv.due_date else None,
+        "kind": "ip" if (le and (le.full_name or "").upper().startswith(("ИП", "ИНДИВ"))) else "ooo",
+        "supplier": {
+            "name": _le("full_name") or _le("name") or "",
+            "short_name": _le("name") or "",
+            "inn": _le("inn"), "kpp": _le("kpp"), "ogrn": _le("ogrn"),
+            "address": _le("address"),
+            "bank_name": _le("bank_name"),
+            "settlement_account": _le("settlement_account"),
+            "bik": _le("bik"), "corr_account": _le("corr_account"),
+        },
+        "buyer": {
+            "name": (cp.name if cp else ""), "inn": (cp.inn if cp else None),
+            "kpp": (getattr(cp, "kpp", None) if cp else None),
+            "address": (getattr(cp, "address", None) if cp else None),
+        },
+        "account_name": (acc.name if acc else None),
+        "items": items,
+        "items_count": len(items),
+        "total": str(total),
+        "vat": str(vat.quantize(q2)) if has_vat else None,
+        "vat_included": inv.vat_included,
+        "total_with_vat": str(total_with_vat),
+        "amount_in_words": rubles_in_words(total_with_vat),
+        "director_name": inv.director_name or _le("director_name"),
+        "accountant_name": inv.accountant_name or _le("accountant_name"),
+        "comment": inv.comment,
+    }

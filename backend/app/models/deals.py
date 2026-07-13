@@ -138,8 +138,16 @@ class Invoice(Base, TimestampMixin):
     due_date: Mapped[date | None] = mapped_column(Date)
     counterparty_id: Mapped[int | None] = mapped_column(ForeignKey("counterparties.id", ondelete="SET NULL"))
     deal_id: Mapped[int | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"))
+    # Поставщик: юрлицо (реквизиты) и счёт зачисления («Ваша компания»)
+    legal_entity_id: Mapped[int | None] = mapped_column(ForeignKey("legal_entities.id", ondelete="SET NULL"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     currency_code: Mapped[str] = mapped_column(String(3), default="RUB")
     is_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    vat_included: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")  # цены с НДС
+    # Ответственные лица (для печатной формы) и комментарий получателю
+    director_name: Mapped[str | None] = mapped_column(String(255))
+    accountant_name: Mapped[str | None] = mapped_column(String(255))
+    comment: Mapped[str | None] = mapped_column(String(2000))
     note: Mapped[str | None] = mapped_column(String(1000))
 
     items: Mapped[list["InvoiceItem"]] = relationship(
@@ -148,7 +156,7 @@ class Invoice(Base, TimestampMixin):
 
     @property
     def total(self) -> Decimal:
-        return sum((i.quantity * i.price for i in self.items), Decimal("0"))
+        return sum((i.line_total for i in self.items), Decimal("0"))
 
 
 class InvoiceItem(Base):
@@ -158,7 +166,17 @@ class InvoiceItem(Base):
     invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), index=True)
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(255))
+    unit: Mapped[str | None] = mapped_column(String(32), default="шт.")     # ед. измерения
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("1"))
     price: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    discount: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("0"))    # скидка, %
+    vat_rate: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("0"))    # НДС, %
 
     invoice: Mapped[Invoice] = relationship(back_populates="items")
+
+    @property
+    def line_total(self) -> Decimal:
+        """Сумма строки с учётом скидки."""
+        base = (self.quantity or Decimal("0")) * (self.price or Decimal("0"))
+        disc = (self.discount or Decimal("0")) / Decimal("100")
+        return (base * (Decimal("1") - disc)).quantize(Decimal("0.01"))

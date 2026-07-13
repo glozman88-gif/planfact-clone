@@ -69,7 +69,7 @@ export function Counterparties() {
 }
 
 function AddModal({ onClose, onSave }: { onClose: () => void; onSave: (b: any) => void }) {
-  const [f, setF] = useState({ name: "", kind: "company", inn: "", phone: "", email: "", note: "" });
+  const [f, setF] = useState({ name: "", kind: "company", inn: "", kpp: "", address: "", phone: "", email: "", note: "" });
   return (
     <Modal title="Новый контрагент" onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); onSave(f); }} className="space-y-3">
@@ -81,9 +81,13 @@ function AddModal({ onClose, onSave }: { onClose: () => void; onSave: (b: any) =
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="label">ИНН</label><input className="input" value={f.inn} onChange={(e) => setF({ ...f, inn: e.target.value })} /></div>
-          <div><label className="label">Телефон</label><input className="input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+          <div><label className="label">КПП</label><input className="input" value={f.kpp} onChange={(e) => setF({ ...f, kpp: e.target.value })} /></div>
         </div>
-        <div><label className="label">Email</label><input className="input" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        <div><label className="label">Адрес</label><input className="input" value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Телефон</label><input className="input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+          <div><label className="label">Email</label><input className="input" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
           <button className="btn-primary">Сохранить</button>

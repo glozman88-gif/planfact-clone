@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, downloadFile, money } from "../api/client";
 import type { Product } from "../api/types";
 import { useApp } from "../context/AppContext";
-import { useAccounts, useCategories, useCounterparties, useDealStatuses, useProducts, useProjects } from "../api/hooks";
+import { useAccounts, useCategories, useCounterparties, useDealStatuses, useLegalEntities, useProducts, useProjects } from "../api/hooks";
 import { Modal } from "../components/Modal";
 import { OperationModal } from "./Operations";
 import type { Operation } from "../api/types";
@@ -25,11 +25,13 @@ export function DealCard() {
   const parties = useCounterparties();
   const statuses = useDealStatuses();
   const products = useProducts();
+  const entities = useLegalEntities();
 
   const [tab, setTab] = useState<"items" | "income" | "outcome" | "shipments" | "invoices">("items");
   const [editOp, setEditOp] = useState<Partial<Operation> | null>(null);
   const [attachType, setAttachType] = useState<"income" | "outcome" | null>(null);
   const [invoicing, setInvoicing] = useState(false);
+  const [printInvoiceId, setPrintInvoiceId] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
   const [statusMenu, setStatusMenu] = useState(false);
   const [uchetMenu, setUchetMenu] = useState(false);
@@ -241,7 +243,7 @@ export function DealCard() {
                 onAdd={() => setAttachType("outcome")} onEdit={(o) => setEditOp(o)} onDel={(oid) => confirm("Удалить операцию?") && removeOp.mutate(oid)} />
             )}
             {tab === "shipments" && <ShipmentsTab dealId={id} isSale={isSale} rows={shipQ.data ?? []} onSaved={invalidate} closed={deal.closed} />}
-            {tab === "invoices" && <InvoicesTab rows={invQ.data ?? []} partyName={partyName} onIssue={() => setInvoicing(true)} />}
+            {tab === "invoices" && <InvoicesTab rows={invQ.data ?? []} partyName={partyName} onIssue={() => setInvoicing(true)} onOpen={(iid: number) => setPrintInvoiceId(iid)} />}
           </div>
         </div>
 
@@ -262,9 +264,12 @@ export function DealCard() {
       )}
       {invoicing && (
         <InvoiceModal dealId={id} companyId={companyId} counterpartyId={deal.counterparty_id}
-          products={products.data ?? []} existingCount={invQ.data?.length ?? 0}
-          onClose={() => setInvoicing(false)} onSaved={() => { invalidate(); setInvoicing(false); }} />
+          products={products.data ?? []} entities={entities.data ?? []} parties={parties.data ?? []}
+          existingCount={invQ.data?.length ?? 0}
+          onClose={() => setInvoicing(false)}
+          onSaved={(iid?: number) => { invalidate(); setInvoicing(false); if (iid) setPrintInvoiceId(iid); }} />
       )}
+      {printInvoiceId && <InvoicePrintView invoiceId={printInvoiceId} onClose={() => setPrintInvoiceId(null)} />}
     </div>
   );
 }
@@ -589,7 +594,7 @@ function ShipmentsTab({ dealId, isSale, rows, onSaved, closed }: any) {
 }
 
 // ---- Вкладка «Счета» ----
-function InvoicesTab({ rows, partyName, onIssue }: any) {
+function InvoicesTab({ rows, partyName, onIssue, onOpen }: any) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -597,62 +602,217 @@ function InvoicesTab({ rows, partyName, onIssue }: any) {
         <button className="btn-primary" onClick={onIssue}>Выставить счёт</button>
       </div>
       <table className="table text-sm">
-        <thead><tr><th>Дата</th><th>№ счёта</th><th>Контрагент</th><th className="text-right">Сумма</th></tr></thead>
+        <thead><tr><th>Дата</th><th>№ счёта</th><th>Контрагент</th><th className="text-right">Сумма</th><th></th></tr></thead>
         <tbody>
           {rows.map((inv: any) => (
-            <tr key={inv.id}><td>{inv.invoice_date}</td><td className="text-brand">{inv.number}</td><td>{partyName(inv.counterparty_id)}</td><td className="text-right">{money(inv.total)}</td></tr>
+            <tr key={inv.id} className="cursor-pointer hover:bg-slate-50" onClick={() => onOpen(inv.id)}>
+              <td>{inv.invoice_date}</td><td className="text-brand">{inv.number}</td>
+              <td>{partyName(inv.counterparty_id)}</td><td className="text-right">{money(inv.total)}</td>
+              <td className="text-right text-brand">Печать →</td>
+            </tr>
           ))}
-          {rows.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-slate-400">Нет счетов</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-slate-400">Нет счетов</td></tr>}
         </tbody>
       </table>
     </div>
   );
 }
 
-function InvoiceModal({ dealId, companyId, counterpartyId, products, existingCount, onClose, onSaved }: any) {
+function InvoiceModal({ dealId, companyId, counterpartyId, products, entities, parties, existingCount, onClose, onSaved }: any) {
   const d = today();
-  const [f, setF] = useState({ number: `${d}-${existingCount + 1}`, invoice_date: d, due_date: "" });
-  const [items, setItems] = useState<any[]>([{ name: "", quantity: "1", price: "0" }]);
+  const plus3 = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const [f, setF] = useState<any>({
+    number: `${d}-${existingCount + 1}`, invoice_date: d, due_date: plus3,
+    legal_entity_id: entities[0]?.id ? String(entities[0].id) : "", counterparty_id: counterpartyId ? String(counterpartyId) : "",
+    vat_included: true, director_name: "", accountant_name: "", comment: "",
+  });
+  const [items, setItems] = useState<any[]>([{ name: "", quantity: "1", price: "0", unit: "шт.", discount: "0", vat_rate: "0" }]);
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
   const upd = (i: number, k: string, v: any) => setItems(items.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
-  const total = items.reduce((s, x) => s + Number(x.quantity || 0) * Number(x.price || 0), 0);
+  const lineOf = (x: any) => Number(x.quantity || 0) * Number(x.price || 0) * (1 - Number(x.discount || 0) / 100);
+  const total = items.reduce((s, x) => s + lineOf(x), 0);
+  const vat = items.reduce((s, x) => { const vr = Number(x.vat_rate || 0); return s + (vr > 0 ? (f.vat_included ? lineOf(x) * vr / (100 + vr) : lineOf(x) * vr / 100) : 0); }, 0);
+
   const save = useMutation({
-    mutationFn: () => api.post("/api/invoices", {
-      ...f, due_date: f.due_date || null, counterparty_id: counterpartyId || null, deal_id: dealId,
-      items: items.filter((x) => x.name).map((x) => ({ product_id: x.product_id || null, name: x.name, quantity: String(x.quantity || "1"), price: String(x.price || "0") })),
-    }, { params: { company_id: companyId } }),
-    onSuccess: onSaved,
+    mutationFn: async () => (await api.post("/api/invoices", {
+      number: f.number, invoice_date: f.invoice_date, due_date: f.due_date || null,
+      legal_entity_id: f.legal_entity_id ? Number(f.legal_entity_id) : null,
+      counterparty_id: f.counterparty_id ? Number(f.counterparty_id) : null, deal_id: dealId,
+      vat_included: f.vat_included, director_name: f.director_name || null, accountant_name: f.accountant_name || null, comment: f.comment || null,
+      items: items.filter((x) => x.name).map((x) => ({
+        product_id: x.product_id || null, name: x.name, unit: x.unit || "шт.",
+        quantity: String(x.quantity || "1"), price: String(x.price || "0"),
+        discount: String(x.discount || "0"), vat_rate: String(x.vat_rate || "0"),
+      })),
+    }, { params: { company_id: companyId } })).data,
   });
+  const submit = async (preview: boolean) => { const inv = await save.mutateAsync(); onSaved(preview ? inv.id : undefined); };
+
   return (
-    <Modal title="Выставить счёт" onClose={onClose} wide>
-      <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-3">
+    <Modal title="Выставление счёта" onClose={onClose} wide>
+      <div className="space-y-4">
         <div className="grid grid-cols-3 gap-3">
-          <div><label className="label">№ счёта</label><input className="input" value={f.number} onChange={(e) => set("number", e.target.value)} required /></div>
-          <div><label className="label">Дата</label><input type="date" className="input" value={f.invoice_date} onChange={(e) => set("invoice_date", e.target.value)} /></div>
+          <div><label className="label">№ счёта</label><input className="input" value={f.number} onChange={(e) => set("number", e.target.value)} /></div>
+          <div><label className="label">Дата выставления</label><input type="date" className="input" value={f.invoice_date} onChange={(e) => set("invoice_date", e.target.value)} /></div>
           <div><label className="label">Оплатить до</label><input type="date" className="input" value={f.due_date} onChange={(e) => set("due_date", e.target.value)} /></div>
         </div>
-        <div className="space-y-2">
-          {items.map((x, i) => (
-            <div key={i} className="flex items-end gap-2">
-              <div className="flex-1"><label className="label">Позиция</label>
-                <ProductPicker value={x.name} products={products} companyId={companyId}
-                  onSelect={(sel) => setItems(items.map((it, idx) => idx === i ? (sel.product_id
-                    ? { ...it, product_id: sel.product_id, name: sel.name, price: sel.price ?? it.price }
-                    : { ...it, name: sel.name, product_id: null }) : it))} />
-              </div>
-              <div><label className="label">Кол-во</label><input type="number" step="0.001" className="input w-20" value={x.quantity} onChange={(e) => upd(i, "quantity", e.target.value)} /></div>
-              <div><label className="label">Цена</label><input type="number" step="0.01" className="input w-28" value={x.price} onChange={(e) => upd(i, "price", e.target.value)} /></div>
-              <button type="button" className="pb-2 text-red-500" onClick={() => setItems(items.filter((_, idx) => idx !== i))}>×</button>
-            </div>
-          ))}
-          <button type="button" className="btn-ghost" onClick={() => setItems([...items, { name: "", quantity: "1", price: "0" }])}>+ позиция</button>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Ваша компания (юрлицо)</label>
+            <select className="input" value={f.legal_entity_id} onChange={(e) => set("legal_entity_id", e.target.value)}>
+              <option value="">— выберите юрлицо —</option>
+              {entities.map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            {entities.length === 0 && <p className="mt-1 text-xs text-amber-600">Добавьте юрлицо с реквизитами в «Справочники → Юридические лица».</p>}
+          </div>
+          <div><label className="label">Клиент</label>
+            <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
+              <option value="">— не выбран —</option>
+              {parties.map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </div>
         </div>
-        <div className="text-right text-sm">Итого: <b>{money(total)}</b></div>
+
+        <div className="rounded-md border p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-semibold">Товары и услуги</span>
+            <label className="flex items-center gap-2 text-sm text-slate-500"><input type="checkbox" checked={f.vat_included} onChange={(e) => set("vat_included", e.target.checked)} />Цены с НДС</label>
+          </div>
+          <div className="space-y-2">
+            {items.map((x, i) => (
+              <div key={i} className="flex items-end gap-2">
+                <span className="pb-2 text-xs text-slate-400">{i + 1}</span>
+                <div className="flex-1"><label className="label">Наименование</label>
+                  <ProductPicker value={x.name} products={products} companyId={companyId}
+                    onSelect={(sel) => setItems(items.map((it, idx) => idx === i ? (sel.product_id
+                      ? { ...it, product_id: sel.product_id, name: sel.name, price: sel.price ?? it.price }
+                      : { ...it, name: sel.name, product_id: null }) : it))} /></div>
+                <div><label className="label">Кол-во</label><input type="number" step="0.001" className="input w-16" value={x.quantity} onChange={(e) => upd(i, "quantity", e.target.value)} /></div>
+                <div><label className="label">Ед.</label><input className="input w-14" value={x.unit} onChange={(e) => upd(i, "unit", e.target.value)} /></div>
+                <div><label className="label">Цена</label><input type="number" step="0.01" className="input w-24" value={x.price} onChange={(e) => upd(i, "price", e.target.value)} /></div>
+                <div><label className="label">Скидка %</label><input type="number" step="1" className="input w-16" value={x.discount} onChange={(e) => upd(i, "discount", e.target.value)} /></div>
+                <div><label className="label">НДС %</label>
+                  <select className="input w-20" value={x.vat_rate} onChange={(e) => upd(i, "vat_rate", e.target.value)}>
+                    {["0", "5", "7", "10", "20"].map((v) => <option key={v} value={v}>{v === "0" ? "Без" : v}</option>)}
+                  </select></div>
+                <div className="w-24 pb-2 text-right text-sm font-medium">{money(lineOf(x))}</div>
+                <button type="button" className="pb-2 text-red-500" onClick={() => setItems(items.filter((_, idx) => idx !== i))}>×</button>
+              </div>
+            ))}
+            <button type="button" className="text-sm text-brand hover:underline" onClick={() => setItems([...items, { name: "", quantity: "1", price: "0", unit: "шт.", discount: "0", vat_rate: items[items.length - 1]?.vat_rate ?? "0" }])}>+ Добавить позицию</button>
+          </div>
+          <div className="mt-3 space-y-0.5 border-t pt-2 text-right text-sm">
+            <div>Итого: <b>{money(total)}</b></div>
+            <div className="text-slate-500">{vat > 0 ? <>{f.vat_included ? "В том числе НДС" : "НДС"}: <b>{money(vat)}</b></> : "Без НДС"}</div>
+            <div className="text-base">Всего к оплате: <b>{money(f.vat_included ? total : total + vat)}</b></div>
+          </div>
+        </div>
+
+        <details className="rounded-md border p-3">
+          <summary className="cursor-pointer text-sm font-semibold">Ответственные лица и комментарий</summary>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div><label className="label">ФИО руководителя</label><input className="input" value={f.director_name} onChange={(e) => set("director_name", e.target.value)} placeholder="из реквизитов юрлица, если пусто" /></div>
+            <div><label className="label">ФИО бухгалтера</label><input className="input" value={f.accountant_name} onChange={(e) => set("accountant_name", e.target.value)} /></div>
+            <div className="col-span-2"><label className="label">Комментарий для получателя</label><input className="input" value={f.comment} onChange={(e) => set("comment", e.target.value)} /></div>
+          </div>
+        </details>
+
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" disabled={save.isPending}>{save.isPending ? "Сохранение…" : "Выставить счёт"}</button>
+          <button type="button" className="btn-ghost" disabled={save.isPending} onClick={() => submit(false)}>Сохранить счёт</button>
+          <button type="button" className="btn-primary" disabled={save.isPending} onClick={() => submit(true)}>{save.isPending ? "Сохранение…" : "Сохранить и посмотреть"}</button>
         </div>
-      </form>
+      </div>
     </Modal>
+  );
+}
+
+// ---- Печатная форма «Счёт на оплату» ----
+function InvoicePrintView({ invoiceId, onClose }: { invoiceId: number; onClose: () => void }) {
+  const { data } = useQuery({ queryKey: ["invoice-print", invoiceId], queryFn: async () => (await api.get(`/api/invoices/${invoiceId}/print`)).data as any });
+  const fmtDate = (iso?: string) => { if (!iso) return ""; const [y, m, dd] = iso.split("-"); return `${dd}.${m}.${y}`; };
+  const s = data?.supplier, b = data?.buyer;
+  const dash = (v: any) => v || "—";
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-100 p-4">
+      <style>{`@media print{.no-print{display:none!important}.inv-sheet{box-shadow:none!important;margin:0!important;max-width:100%!important}body{background:#fff}}`}</style>
+      <div className="no-print mx-auto mb-3 flex max-w-3xl items-center justify-between">
+        <button className="btn-ghost" onClick={onClose}>← Закрыть</button>
+        <button className="btn-primary" onClick={() => window.print()}>🖨 Печать / PDF</button>
+      </div>
+      {!data ? <div className="py-10 text-center text-slate-400">Загрузка…</div> : (
+        <div className="inv-sheet mx-auto max-w-3xl rounded bg-white p-8 text-sm shadow-lg" style={{ fontFamily: "Times New Roman, serif" }}>
+          {/* Банковские реквизиты поставщика */}
+          <table className="w-full border-collapse text-xs" style={{ border: "1px solid #000" }}>
+            <tbody>
+              <tr>
+                <td className="p-1" style={{ border: "1px solid #000" }} colSpan={2}>{dash(s.bank_name)}</td>
+                <td className="p-1 text-center" style={{ border: "1px solid #000", width: "18%" }}>БИК</td>
+                <td className="p-1" style={{ border: "1px solid #000", width: "26%" }}>{dash(s.bik)}</td>
+              </tr>
+              <tr>
+                <td className="p-1" style={{ border: "1px solid #000" }} colSpan={2}>Банк получателя</td>
+                <td className="p-1 text-center" style={{ border: "1px solid #000" }}>Сч. №</td>
+                <td className="p-1" style={{ border: "1px solid #000" }}>{dash(s.corr_account)}</td>
+              </tr>
+              <tr>
+                <td className="p-1" style={{ border: "1px solid #000", width: "28%" }}>ИНН {dash(s.inn)}</td>
+                <td className="p-1" style={{ border: "1px solid #000", width: "28%" }}>КПП {dash(s.kpp)}</td>
+                <td className="p-1" style={{ border: "1px solid #000" }} rowSpan={2}>Сч. №</td>
+                <td className="p-1" style={{ border: "1px solid #000" }} rowSpan={2}>{dash(s.settlement_account)}</td>
+              </tr>
+              <tr><td className="p-1" style={{ border: "1px solid #000" }} colSpan={2}>Получатель<br /><b>{dash(s.name)}</b></td></tr>
+            </tbody>
+          </table>
+
+          <h2 className="my-4 border-b-2 border-black pb-2 text-xl font-bold">Счёт на оплату № {data.number} от {fmtDate(data.date)}</h2>
+
+          <table className="mb-4 w-full text-xs">
+            <tbody>
+              <tr><td className="w-24 align-top font-semibold">Поставщик<br />(Исполнитель):</td>
+                <td><b>{dash(s.name)}</b>{s.inn && `, ИНН ${s.inn}`}{s.kpp && `, КПП ${s.kpp}`}{s.address && `, ${s.address}`}</td></tr>
+              <tr><td className="align-top font-semibold pt-2">Покупатель<br />(Заказчик):</td>
+                <td className="pt-2"><b>{dash(b.name)}</b>{b.inn && `, ИНН ${b.inn}`}{b.kpp && `, КПП ${b.kpp}`}{b.address && `, ${b.address}`}</td></tr>
+            </tbody>
+          </table>
+
+          <table className="w-full border-collapse text-xs" style={{ border: "1px solid #000" }}>
+            <thead>
+              <tr>
+                {["№", "Товары (работы, услуги)", "Кол-во", "Ед.", "Цена", "Сумма"].map((h, i) => (
+                  <th key={i} className="p-1" style={{ border: "1px solid #000" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((it: any) => (
+                <tr key={it.n}>
+                  <td className="p-1 text-center" style={{ border: "1px solid #000" }}>{it.n}</td>
+                  <td className="p-1" style={{ border: "1px solid #000" }}>{it.name}</td>
+                  <td className="p-1 text-right" style={{ border: "1px solid #000" }}>{Number(it.quantity)}</td>
+                  <td className="p-1 text-center" style={{ border: "1px solid #000" }}>{it.unit}</td>
+                  <td className="p-1 text-right" style={{ border: "1px solid #000" }}>{money(it.price)}</td>
+                  <td className="p-1 text-right" style={{ border: "1px solid #000" }}>{money(it.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="mt-2 text-right text-xs">
+            <div>Итого: <b>{money(data.total)}</b></div>
+            <div>{data.vat ? <>{data.vat_included ? "В том числе НДС" : "НДС"}: <b>{money(data.vat)}</b></> : "Без налога (НДС)"}</div>
+            <div>Всего к оплате: <b>{money(data.total_with_vat)}</b></div>
+          </div>
+
+          <p className="mt-3 text-xs">Всего наименований {data.items_count}, на сумму {money(data.total_with_vat)} руб.</p>
+          <p className="text-xs font-semibold">{data.amount_in_words}</p>
+          {data.comment && <p className="mt-2 text-xs italic text-slate-600">{data.comment}</p>}
+
+          <div className="mt-8 flex justify-between text-xs">
+            <div>Руководитель ____________________ <span className="text-slate-500">{dash(data.director_name)}</span></div>
+            <div>Бухгалтер ____________________ <span className="text-slate-500">{dash(data.accountant_name)}</span></div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

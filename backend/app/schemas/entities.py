@@ -80,6 +80,12 @@ class LegalEntityIn(BaseModel):
     kpp: str | None = None
     ogrn: str | None = None
     address: str | None = None
+    bank_name: str | None = None
+    settlement_account: str | None = None
+    bik: str | None = None
+    corr_account: str | None = None
+    director_name: str | None = None
+    accountant_name: str | None = None
 
 
 class LegalEntityOut(ORMModel):
@@ -91,6 +97,12 @@ class LegalEntityOut(ORMModel):
     kpp: str | None = None
     ogrn: str | None = None
     address: str | None = None
+    bank_name: str | None = None
+    settlement_account: str | None = None
+    bik: str | None = None
+    corr_account: str | None = None
+    director_name: str | None = None
+    accountant_name: str | None = None
     is_archived: bool
 
 
@@ -184,6 +196,8 @@ class CounterpartyIn(BaseModel):
     group_id: int | None = None
     kind: CounterpartyKind = CounterpartyKind.company
     inn: str | None = None
+    kpp: str | None = None
+    address: str | None = None
     phone: str | None = None
     email: str | None = None
     note: str | None = None
@@ -198,6 +212,8 @@ class CounterpartyOut(ORMModel):
     name: str
     kind: CounterpartyKind
     inn: str | None
+    kpp: str | None = None
+    address: str | None = None
     phone: str | None
     email: str | None
     note: str | None
@@ -440,16 +456,22 @@ class ProductOut(ORMModel):
 class InvoiceItemIn(BaseModel):
     product_id: int | None = None
     name: str
+    unit: str | None = "шт."
     quantity: Decimal = Decimal("1")
     price: Decimal = Decimal("0")
+    discount: Decimal = Decimal("0")
+    vat_rate: Decimal = Decimal("0")
 
 
 class InvoiceItemOut(ORMModel):
     id: int
     product_id: int | None
     name: str
+    unit: str | None = "шт."
     quantity: Decimal
     price: Decimal
+    discount: Decimal = Decimal("0")
+    vat_rate: Decimal = Decimal("0")
 
 
 class InvoiceIn(BaseModel):
@@ -458,8 +480,14 @@ class InvoiceIn(BaseModel):
     due_date: date | None = None
     counterparty_id: int | None = None
     deal_id: int | None = None
+    legal_entity_id: int | None = None
+    account_id: int | None = None
     currency_code: str = "RUB"
     is_paid: bool = False
+    vat_included: bool = True
+    director_name: str | None = None
+    accountant_name: str | None = None
+    comment: str | None = None
     note: str | None = None
     items: list[InvoiceItemIn] = []
 
@@ -472,8 +500,14 @@ class InvoiceOut(ORMModel):
     due_date: date | None
     counterparty_id: int | None
     deal_id: int | None
+    legal_entity_id: int | None = None
+    account_id: int | None = None
     currency_code: str
     is_paid: bool
+    vat_included: bool = True
+    director_name: str | None = None
+    accountant_name: str | None = None
+    comment: str | None = None
     note: str | None
     items: list[InvoiceItemOut] = []
     total: Decimal

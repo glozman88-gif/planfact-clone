@@ -13,6 +13,12 @@ export function LegalEntities() {
         { name: "kpp", label: "КПП" },
         { name: "ogrn", label: "ОГРН / ОГРНИП" },
         { name: "address", label: "Адрес" },
+        { name: "bank_name", label: "Банк (наименование)" },
+        { name: "settlement_account", label: "Расчётный счёт (Р/с)" },
+        { name: "bik", label: "БИК" },
+        { name: "corr_account", label: "Корр. счёт (К/с)" },
+        { name: "director_name", label: "ФИО руководителя" },
+        { name: "accountant_name", label: "ФИО бухгалтера" },
       ]}
       columns={[
         { name: "name", label: "Название" },
