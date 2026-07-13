@@ -57,6 +57,11 @@ class Operation(Base, TimestampMixin):
 
     description: Mapped[str | None] = mapped_column(String(1000))
 
+    # ID операции в банке (для инкрементальной синхронизации без дублей)
+    external_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    # Исключить из доходов/расходов во всех отчётах (ОПиУ и ДДС)
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     items: Mapped[list["OperationItem"]] = relationship(
         back_populates="operation", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -73,5 +78,7 @@ class OperationItem(Base):
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), index=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
     description: Mapped[str | None] = mapped_column(String(500))
+    # Исключить эту часть разбивки из доходов/расходов в отчётах
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     operation: Mapped[Operation] = relationship(back_populates="items")

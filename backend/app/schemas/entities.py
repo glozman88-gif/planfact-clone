@@ -67,6 +67,7 @@ class AccountOut(ORMModel):
     kind: AccountKind
     currency_code: str
     opening_balance: Decimal
+    credit_limit: Decimal = Decimal("0")
     exclude_from_totals: bool
     is_archived: bool
     is_undistributed: bool = False
@@ -227,6 +228,7 @@ class OperationItemIn(BaseModel):
     category_id: int | None = None
     project_id: int | None = None
     description: str | None = None
+    excluded: bool = False
 
 
 class OperationItemOut(ORMModel):
@@ -235,6 +237,7 @@ class OperationItemOut(ORMModel):
     category_id: int | None
     project_id: int | None
     description: str | None
+    excluded: bool = False
 
 
 class OperationIn(BaseModel):
@@ -257,6 +260,7 @@ class OperationIn(BaseModel):
     counterparty_id: int | None = None
     deal_id: int | None = None
     description: str | None = None
+    excluded: bool = False
     items: list[OperationItemIn] = []
 
     @model_validator(mode="before")
@@ -290,6 +294,8 @@ class OperationOut(ORMModel):
     counterparty_id: int | None
     deal_id: int | None
     description: str | None
+    excluded: bool = False
+    external_id: str | None = None
     items: list[OperationItemOut] = []
 
 

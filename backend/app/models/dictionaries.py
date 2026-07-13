@@ -61,6 +61,8 @@ class Account(Base, TimestampMixin):
     currency_code: Mapped[str] = mapped_column(String(3), default="RUB")
     # Начальный остаток на дату начала учёта
     opening_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"))
+    # Кредитный лимит (овердрафт) — не входит в остаток, показывается отдельно
+    credit_limit: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0")
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     # Исключить из общего остатка/кассовых разрывов (напр. кредитные карты)
     exclude_from_totals: Mapped[bool] = mapped_column(Boolean, default=False)

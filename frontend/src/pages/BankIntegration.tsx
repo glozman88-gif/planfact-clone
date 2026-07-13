@@ -542,10 +542,27 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
           <div className="py-6 text-center text-sm">
             {err ? <span className="text-red-600">{err}</span>
               : syncRes ? (
-                <div className="space-y-3">
-                  <div className="text-emerald-600">✓ Синхронизировано с {bank.name}</div>
-                  <div className="text-slate-600">Загружено операций: <b>{syncRes.operations}</b>. Остатки сверены с банком по {syncRes.accounts_reconciled} счетам.</div>
-                  <button className="btn-primary" onClick={() => { onDone(); onClose(); }}>Готово</button>
+                <div className="space-y-3 text-left">
+                  <div className="text-center text-emerald-600">✓ Синхронизировано с {bank.name}</div>
+                  <div className="rounded-md border p-3 text-slate-600">
+                    <div>Новых операций: <b>{syncRes.new}</b></div>
+                    <div>Уже были загружены (пропущено): <b>{syncRes.skipped}</b></div>
+                    <div>Остатки сверены с банком по <b>{syncRes.accounts_reconciled}</b> счетам</div>
+                    {syncRes.conflicts?.length > 0 && <div className="mt-1 text-amber-600">Конфликтов (изменены): <b>{syncRes.conflicts.length}</b></div>}
+                  </div>
+                  {syncRes.conflicts?.length > 0 && (
+                    <details className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
+                      <summary className="cursor-pointer font-medium text-amber-700">Конфликты — операции, изменённые после загрузки</summary>
+                      <div className="mt-2 max-h-40 space-y-1 overflow-auto">
+                        {syncRes.conflicts.slice(0, 50).map((cf: any, i: number) => (
+                          <div key={i} className="border-b pb-1">
+                            <span className="text-slate-500">{cf.reason}:</span> в приложении {money(cf.app.amount)} от {cf.app.date}, в банке {money(cf.bank.amount)} от {cf.bank.date}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <div className="text-center"><button className="btn-primary" onClick={() => { onDone(); onClose(); }}>Готово</button></div>
                 </div>
               ) : "Синхронизируем операции и сверяем остатки…"}
           </div>

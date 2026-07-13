@@ -45,6 +45,7 @@ export function Accounts() {
         { name: "legal_entity_id", label: "Юрлицо", render: (r) => leName(r.legal_entity_id) },
         { name: "currency_code", label: "Валюта" },
         { name: "balance", label: "Текущий остаток", align: "right", render: (r) => money(balMap.get(r.id) ?? "0", r.currency_code) },
+        { name: "credit_limit", label: "Кредитный лимит", align: "right", render: (r) => Number(r.credit_limit) > 0 ? <span className="text-slate-400">+{money(r.credit_limit, r.currency_code)}</span> : "—" },
       ]}
     />
   );

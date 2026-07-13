@@ -32,12 +32,21 @@ async def get_accounts(token: str) -> list[dict]:
     out: list[dict] = []
     for a in data if isinstance(data, list) else []:
         bal = a.get("balance") or {}
+        # realOtb/balance — реальные свои деньги (без овердрафта); otb включает овердрафт.
+        real = bal.get("realOtb")
+        if real is None:
+            real = bal.get("balance")
+        if real is None:
+            real = bal.get("otb") or 0
+        otb = bal.get("otb")
+        overdraft = (otb - real) if (otb is not None and otb > real) else 0
         out.append({
             "account_number": a.get("accountNumber"),
             "name": a.get("name") or a.get("accountNumber"),
             "currency": CURRENCY.get(str(a.get("currency")), "RUB"),
             "bik": a.get("bankBik"),
-            "balance": bal.get("otb") if bal.get("otb") is not None else (bal.get("balance") or 0),
+            "balance": real,          # без овердрафта
+            "overdraft": overdraft,   # кредитный лимит (овердрафт), показываем отдельно
         })
     return [a for a in out if a["account_number"]]
 
@@ -81,6 +90,7 @@ def normalize_operations(statement: dict, own_accounts: set[str]) -> list[dict]:
             code = str(op.get("operationType") or "")
             otype = "outcome" if code in ("01", "03", "16", "17") else "income"
             cp = op.get("recipient") if otype == "outcome" else op.get("payerName")
+        ext = op.get("id") or op.get("operationId")
         rows.append({
             "op_date": (op.get("date") or "")[:10],
             "type": otype,
@@ -89,5 +99,6 @@ def normalize_operations(statement: dict, own_accounts: set[str]) -> list[dict]:
             "to_account": to_account,
             "counterparty": (cp or "").strip() or None,
             "description": op.get("paymentPurpose") or None,
+            "external_id": str(ext) if ext else None,
         })
     return [r for r in rows if r["op_date"]]

@@ -151,22 +151,31 @@ async def _client_operations(slug: str, token: str, nums: list[str], d_from: str
     return rows
 
 
-async def _bank_balances(slug: str, token: str) -> dict[str, float]:
-    """Текущие остатки банка по номеру счёта (для сверки opening_balance)."""
+async def _bank_balances(slug: str, token: str) -> dict[str, dict]:
+    """Текущие остатки (без овердрафта) и овердрафт по номеру счёта."""
     cl = _client(slug)
     try:
-        return {a["account_number"]: (a.get("balance") or 0) for a in await cl.get_accounts(token)}
+        return {a["account_number"]: {"balance": a.get("balance") or 0, "overdraft": a.get("overdraft") or 0}
+                for a in await cl.get_accounts(token)}
     except Exception:
         return {}
+
+
+def _optype(t) -> str:
+    return t.value if hasattr(t, "value") else str(t)
+
+
+def _sig(acc_id, to_id, op_date, amount, typ, desc) -> tuple:
+    amt = Decimal(str(amount)).quantize(Decimal("0.01"))
+    return (acc_id, to_id, op_date, str(amt), typ, (desc or "")[:40])
 
 
 @router.post("/{slug}/resync")
 async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Query(...),
                  company_id: int = Query(...), date_from: str | None = None):
-    """Пере-синхронизация: заменить операции по счетам подключения свежими из банка и
-    выставить начальные остатки так, чтобы остаток счёта совпал с реальным в банке.
-
-    Исправляет задвоенные перемещения/дубли и нулевой начальный остаток.
+    """Инкрементальная синхронизация: подтягивает ТОЛЬКО новые операции (по ID операции банка,
+    для старых — по подписи), не трогая уже загруженные (с ручными правками). Изменённые в банке
+    возвращаются как конфликты. Начальные остатки сверяются с банком (без овердрафта → credit_limit).
     """
     conn = await db.get(BankConnection, connection_id)
     if conn is None or not conn.token:
@@ -182,7 +191,7 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
     d_till = date.today().isoformat()
     nums = list(num_to_acc.keys())
     rows = await _client_operations(slug, conn.token, nums, d_from, d_till)
-    balances = await _bank_balances(slug, conn.token)
+    bank_bal = await _bank_balances(slug, conn.token)
 
     # авто-распределение по правилам + сопоставление контрагентов
     parties = {p.name.strip().lower(): p for p in (await db.execute(
@@ -194,15 +203,38 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
         r["project_id"] = None
     apply_rules(rows, await load_rules(db, company_id, "bank"))
 
-    # 1) удалить прежние операции по этим счетам (чистый лист)
-    await db.execute(delete(Operation).where(
+    # Существующие операции по этим счетам: индексы по external_id и подписи + текущее движение
+    existing = (await db.execute(select(Operation).where(
         Operation.company_id == company_id,
-        or_(Operation.account_id.in_(app_ids), Operation.to_account_id.in_(app_ids))))
-
-    # 2) создать операции заново (дедуп по счёт+дата+сумма+тип+назначение)
-    seen: set = set()
+        or_(Operation.account_id.in_(app_ids), Operation.to_account_id.in_(app_ids))))).scalars().all()
+    ext_map: dict[str, Operation] = {}
+    sig_map: dict[tuple, Operation] = {}
     net: dict[int, Decimal] = {aid: Decimal("0") for aid in app_ids}
-    created = 0
+
+    def add_net(acc_id, to_id, typ, amt):
+        if typ == "move":
+            if acc_id in net:
+                net[acc_id] -= amt
+            if to_id in net:
+                net[to_id] += amt
+        elif typ == "income":
+            if acc_id in net:
+                net[acc_id] += amt
+        else:
+            if acc_id in net:
+                net[acc_id] -= amt
+
+    ext_count: dict[str, int] = {}
+    for o in existing:
+        if o.external_id:
+            ext_map[o.external_id] = o
+            ext_count[o.external_id] = ext_count.get(o.external_id, 0) + 1
+        sig_map[_sig(o.account_id, o.to_account_id, o.op_date.isoformat(), o.amount, _optype(o.type), o.description)] = o
+        add_net(o.account_id, o.to_account_id, _optype(o.type), Decimal(str(o.amount)))
+
+    new_count = skipped = 0
+    conflicts: list[dict] = []
+    seen_new: set = set()
     for r in rows:
         d = parse_date(r["op_date"])
         amt = Decimal(r["amount"])
@@ -210,45 +242,62 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
             continue
         acc_id = num_to_acc.get(r.get("account"))
         to_id = num_to_acc.get(r.get("to_account")) if r.get("to_account") else None
-        sig = (acc_id, to_id, r["op_date"], str(amt), r["type"], (r.get("description") or "")[:40])
-        if sig in seen:
+        ext = r.get("external_id")
+        sig = _sig(acc_id, to_id, r["op_date"], amt, r["type"], r.get("description"))
+        # 1) идентичность по подписи — уже загружена (с возможными ручными правками аналитики)
+        by_sig = sig_map.get(sig)
+        if by_sig is not None:
+            if ext and not by_sig.external_id:
+                by_sig.external_id = ext  # бэкфилл ID банка для будущих синхронизаций
+            skipped += 1
             continue
-        seen.add(sig)
+        # 2) подпись не совпала, но банковский ID однозначно указывает на загруженную операцию →
+        #    её изменили (в банке или вручную) — конфликт, не грузим повторно
+        if ext and ext_count.get(ext) == 1 and ext in ext_map:
+            o = ext_map[ext]
+            conflicts.append({
+                "op_id": o.id, "external_id": ext,
+                "reason": "Сумма или дата отличаются от загруженной ранее",
+                "bank": {"amount": str(amt), "date": r["op_date"], "type": r["type"], "description": r.get("description")},
+                "app": {"amount": str(o.amount), "date": o.op_date.isoformat()},
+            })
+            skipped += 1
+            continue
+        if sig in seen_new:
+            skipped += 1
+            continue
+        seen_new.add(sig)
         if r["type"] == "move":
             op = Operation(company_id=company_id, type=OperationType.move, status=OperationStatus.committed,
-                           op_date=d, account_id=acc_id, to_account_id=to_id, amount=amt,
-                           currency_code="RUB", category_id=r.get("category_id"),
-                           project_id=r.get("project_id"), description=r.get("description"))
-            if acc_id in net:
-                net[acc_id] -= amt
-            if to_id in net:
-                net[to_id] += amt
+                           op_date=d, account_id=acc_id, to_account_id=to_id, amount=amt, currency_code="RUB",
+                           category_id=r.get("category_id"), project_id=r.get("project_id"),
+                           description=r.get("description"), external_id=ext)
         else:
             otype = OperationType.income if r["type"] == "income" else OperationType.outcome
             op = Operation(company_id=company_id, type=otype, status=OperationStatus.committed,
                            op_date=d, account_id=acc_id, amount=amt, currency_code="RUB",
                            counterparty_id=r.get("counterparty_id"), category_id=r.get("category_id"),
-                           project_id=r.get("project_id"), description=r.get("description"))
-            if acc_id in net:
-                net[acc_id] += amt if otype == OperationType.income else -amt
+                           project_id=r.get("project_id"), description=r.get("description"), external_id=ext)
         op.base_amount = await to_base_amount(db, company_id, amt, "RUB", d)
         db.add(op)
-        created += 1
+        add_net(acc_id, to_id, r["type"], amt)
+        new_count += 1
 
-    # 3) сверка: opening_balance = текущий остаток банка − движение по операциям
+    # Сверка: opening_balance = остаток банка (без овердрафта) − движение; овердрафт → credit_limit
     reconciled = 0
     for num, aid in num_to_acc.items():
-        bal = balances.get(num)
-        if bal is None:
-            continue
+        bb = bank_bal.get(num)
         acc = await db.get(Account, aid)
-        if acc is not None:
-            acc.opening_balance = (Decimal(str(bal)) - net.get(aid, Decimal("0"))).quantize(Decimal("0.01"))
-            reconciled += 1
+        if acc is None or bb is None:
+            continue
+        acc.opening_balance = (Decimal(str(bb["balance"])) - net.get(aid, Decimal("0"))).quantize(Decimal("0.01"))
+        acc.credit_limit = Decimal(str(bb.get("overdraft") or 0)).quantize(Decimal("0.01"))
+        reconciled += 1
 
     conn.last_sync_at = datetime.now(timezone.utc)
     await db.commit()
-    return {"operations": created, "accounts_reconciled": reconciled}
+    return {"new": new_count, "skipped": skipped, "conflicts": conflicts,
+            "accounts_reconciled": reconciled, "operations": new_count}
 
 
 @router.post("/{slug}/operations")
