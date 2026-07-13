@@ -32,6 +32,7 @@ export function DealCard() {
   const [attachType, setAttachType] = useState<"income" | "outcome" | null>(null);
   const [invoicing, setInvoicing] = useState(false);
   const [printInvoiceId, setPrintInvoiceId] = useState<number | null>(null);
+  const [editDeal, setEditDeal] = useState(false);
   const [menu, setMenu] = useState(false);
   const [statusMenu, setStatusMenu] = useState(false);
   const [uchetMenu, setUchetMenu] = useState(false);
@@ -100,13 +101,16 @@ export function DealCard() {
     <div className="space-y-4">
       <div className="text-xs text-slate-400"><Link to="/deals" className="hover:underline">{isSale ? "Сделки продаж" : "Сделки закупок"}</Link></div>
       <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-bold">{deal.name}</h1>
+        <h1 className="cursor-pointer text-2xl font-bold hover:text-brand" title="Редактировать сделку" onClick={() => setEditDeal(true)}>{deal.name}</h1>
         <div className="relative ml-auto">
           <button className="rounded-md border px-3 py-1.5 text-slate-500 hover:bg-slate-50" onClick={() => setMenu(!menu)}>⋯</button>
           {menu && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
               <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border bg-white py-1 text-sm shadow-lg">
+                <button className="block w-full px-4 py-2 text-left hover:bg-slate-50" onClick={() => { setMenu(false); setEditDeal(true); }}>
+                  Редактировать сделку
+                </button>
                 <button className="block w-full px-4 py-2 text-left hover:bg-slate-50" onClick={() => { setMenu(false); updateDeal.mutate({ closed: !deal.closed }); }}>
                   {deal.closed ? "Открыть сделку" : "Закрыть сделку"}
                 </button>
@@ -147,8 +151,8 @@ export function DealCard() {
           <div className="text-2xl font-bold">{money(amount)}</div>
           <div className="space-y-1 border-t pt-2 text-sm">
             <Row label="Тип" value={isSale ? "Продажа" : "Закупка"} />
-            <Row label={isSale ? "Клиент" : "Поставщик"} value={partyName(deal.counterparty_id)} />
-            <Row label="Создана" value={deal.start_date ?? "—"} />
+            <Row label={isSale ? "Клиент" : "Поставщик"} value={partyName(deal.counterparty_id)} onClick={() => setEditDeal(true)} />
+            <Row label="Создана" value={deal.start_date ?? "—"} onClick={() => setEditDeal(true)} />
           </div>
         </div>
 
@@ -270,6 +274,11 @@ export function DealCard() {
           onSaved={(iid?: number) => { invalidate(); setInvoicing(false); if (iid) setPrintInvoiceId(iid); }} />
       )}
       {printInvoiceId && <InvoicePrintView invoiceId={printInvoiceId} onClose={() => setPrintInvoiceId(null)} />}
+      {editDeal && (
+        <EditDealModal deal={deal} parties={parties.data ?? []} isSale={isSale}
+          onClose={() => setEditDeal(false)}
+          onSave={(patch: any) => { updateDeal.mutate(patch); setEditDeal(false); }} />
+      )}
     </div>
   );
 }
@@ -282,11 +291,47 @@ function pickDeal(d: any) {
   };
 }
 
-function Row({ label, value, valueClass = "" }: { label: string; value: any; valueClass?: string }) {
+// ---- Редактирование сделки (клиент, дата, название, НДС, комментарий) ----
+function EditDealModal({ deal, parties, isSale, onClose, onSave }: any) {
+  const [f, setF] = useState({
+    name: deal.name ?? "", start_date: deal.start_date ?? today(),
+    counterparty_id: deal.counterparty_id ? String(deal.counterparty_id) : "",
+    vat_mode: deal.vat_mode ?? "with_vat", note: deal.note ?? "",
+  });
+  const set = (k: string, v: any) => setF({ ...f, [k]: v });
+  return (
+    <Modal title="Редактирование сделки" onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name: f.name, start_date: f.start_date || null, counterparty_id: f.counterparty_id ? Number(f.counterparty_id) : null, vat_mode: f.vat_mode, note: f.note || null }); }} className="space-y-3">
+        <div><label className="label">Название сделки</label><input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} required /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Дата сделки</label><input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></div>
+          <div><label className="label">НДС</label>
+            <select className="input" value={f.vat_mode} onChange={(e) => set("vat_mode", e.target.value)}>
+              <option value="with_vat">С учётом НДС</option><option value="without_vat">Без НДС</option>
+            </select></div>
+        </div>
+        <div><label className="label">{isSale ? "Клиент" : "Поставщик"}</label>
+          <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
+            <option value="">— не выбран —</option>
+            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select></div>
+        <div><label className="label">Комментарий</label><textarea className="input" rows={2} value={f.note} onChange={(e) => set("note", e.target.value)} /></div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-ghost" onClick={onClose}>Отменить</button>
+          <button className="btn-primary">Сохранить</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function Row({ label, value, valueClass = "", onClick }: { label: string; value: any; valueClass?: string; onClick?: () => void }) {
   return (
     <div className="flex justify-between gap-2">
       <span className="text-slate-400">{label}</span>
-      <span className={valueClass}>{value}</span>
+      {onClick
+        ? <button className={`border-b border-dotted border-slate-400 text-left hover:text-brand ${valueClass}`} onClick={onClick}>{value}</button>
+        : <span className={valueClass}>{value}</span>}
     </div>
   );
 }
