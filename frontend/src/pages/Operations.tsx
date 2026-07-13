@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useLegalEntities, useProjects } from "../api/hooks";
@@ -38,14 +38,16 @@ export function Operations() {
   }, []);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkEditing, setBulkEditing] = useState(false);
+  const [pageSize, setPageSize] = useState(50);
 
-  const list = useQuery({
-    queryKey: ["operations", companyId, filters, Array.from(types)],
+  const list = useInfiniteQuery({
+    queryKey: ["operations", companyId, filters, Array.from(types), pageSize],
     enabled: !!companyId,
-    queryFn: async () =>
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) =>
       (await api.get<OperationList>("/api/operations", {
         params: {
-          company_id: companyId, limit: 500,
+          company_id: companyId, limit: pageSize, offset: pageParam,
           types: types.size ? Array.from(types).join(",") : undefined,
           date_from: filters.date_from || undefined, date_to: filters.date_to || undefined,
           account_id: filters.account_id || undefined, category_id: filters.category_id || undefined,
@@ -56,6 +58,10 @@ export function Operations() {
           search: filters.search || undefined,
         },
       })).data,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
   });
 
   const save = useMutation({
@@ -91,7 +97,8 @@ export function Operations() {
   // Сбрасываем выделение при смене фильтров/типов (список меняется)
   useEffect(() => { setSelected(new Set()); }, [filters, Array.from(types).join(",")]);
 
-  const rows = list.data?.items ?? [];
+  const rows = list.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = list.data?.pages[0]?.total ?? 0;
   const allSelected = rows.length > 0 && rows.every((o) => selected.has(o.id));
   const toggleOne = (id: number) => {
     const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s);
@@ -129,7 +136,7 @@ export function Operations() {
   const delFilter = useMutation({ mutationFn: (id: number) => api.delete(`/api/quick-filters/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ["quick-filters"] }) });
   const applyFilter = (f: any) => { if (f.params?.filters) setFilters({ ...filters, ...f.params.filters }); if (f.params?.types) setTypes(new Set(f.params.types)); };
 
-  const sm = list.data?.summary;
+  const sm = list.data?.pages[0]?.summary;
 
   return (
     <div className="flex gap-4">
@@ -251,7 +258,7 @@ export function Operations() {
               </tr>
             </thead>
             <tbody>
-              {list.data?.items.map((op) => (
+              {rows.map((op) => (
                 <tr key={op.id} className={`hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : ""}`}>
                   <td><input type="checkbox" checked={selected.has(op.id)} onChange={() => toggleOne(op.id)} /></td>
                   <td className="whitespace-nowrap">{op.op_date}</td>
@@ -271,7 +278,7 @@ export function Operations() {
                   </td>
                 </tr>
               ))}
-              {list.data && list.data.items.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-slate-400">Нет операций</td></tr>}
+              {list.data && rows.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-slate-400">Нет операций</td></tr>}
             </tbody>
             {sm && sm.count > 0 && (
               <tfoot>
@@ -283,6 +290,23 @@ export function Operations() {
               </tfoot>
             )}
           </table>
+        </div>
+        {/* Пагинация: размер страницы + показать ещё */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-3 py-2 text-sm text-slate-500">
+          <div className="flex items-center gap-2">
+            <span>Показано {rows.length} из {total}</span>
+            <span className="text-slate-300">·</span>
+            <label className="flex items-center gap-1">На странице:
+              <select className="input !h-8 !w-20 !py-1" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                {[25, 50, 100, 200, 500].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+          {list.hasNextPage && (
+            <button className="btn-ghost" disabled={list.isFetchingNextPage} onClick={() => list.fetchNextPage()}>
+              {list.isFetchingNextPage ? "Загрузка…" : "Показать ещё"}
+            </button>
+          )}
         </div>
       </div>
 
