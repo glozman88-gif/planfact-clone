@@ -170,6 +170,11 @@ async def bank_detect(
         r["project_id"] = None
         r["status"] = "new"
 
+    # Авто-распределение по сохранённым правилам (статья/проект/контрагент)
+    from app.api.rules import load_rules
+    from app.services.dist_rules import apply_rules
+    apply_rules(rows, await load_rules(db, company_id, "bank"))
+
     dates = [r["op_date"] for r in rows]
     total_sum = sum((Decimal(r["amount"]) if r["type"] == "income" else -Decimal(r["amount"]))
                     for r in rows if r["type"] != "move")

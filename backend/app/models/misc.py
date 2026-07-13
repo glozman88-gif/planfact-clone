@@ -1,7 +1,7 @@
 """Вспомогательные сущности: вложения, аудит, сохранённые фильтры, журнал импорта."""
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, TimestampMixin
@@ -48,6 +48,25 @@ class QuickFilter(Base, TimestampMixin):
     scope: Mapped[str] = mapped_column(String(64))  # operations | deals ...
     name: Mapped[str] = mapped_column(String(255))
     params: Mapped[str] = mapped_column(Text)  # JSON-строка с параметрами фильтра
+
+
+class DistributionRule(Base, TimestampMixin):
+    """Правило распределения операций при импорте (авто-назначение статьи/проекта/контрагента).
+
+    Условия (JSON) объединяются по И; действия (JSON) проставляют аналитику.
+    """
+
+    __tablename__ = "distribution_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    scope: Mapped[str] = mapped_column(String(32), default="bank")     # bank | card | marketplace
+    op_type: Mapped[str | None] = mapped_column(String(16))            # income | outcome | move | NULL(любой)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    conditions: Mapped[str] = mapped_column(Text)                      # JSON [{param, op, value}]
+    actions: Mapped[str] = mapped_column(Text)                         # JSON {category_id, project_id, counterparty_id}
 
 
 class ImportLog(Base, TimestampMixin):

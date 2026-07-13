@@ -54,6 +54,7 @@ export function ImportPreviewModal({ companyId, source, detect, accounts, legalE
   const [rows, setRows] = useState<DetectRow[]>(() => detect.rows.map((r) => ({ ...r })));
   const [tab, setTab] = useState<"ops" | "parties" | "accounts" | "entities">("ops");
   const [result, setResult] = useState<any>(null);
+  const [showRule, setShowRule] = useState(false);
 
   const setRow = (i: number, patch: Partial<DetectRow>) =>
     setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -102,8 +103,14 @@ export function ImportPreviewModal({ companyId, source, detect, accounts, legalE
               {label}
             </button>
           ))}
-          <button className="ml-auto pb-2 font-medium text-brand hover:underline">Создать правило распределения</button>
+          <button className="ml-auto pb-2 font-medium text-brand hover:underline" onClick={() => setShowRule(true)}>Создать правило распределения</button>
         </div>
+        {showRule && (
+          <RuleModal companyId={companyId}
+            onClose={() => setShowRule(false)}
+            onApplied={(newRows) => { setRows(newRows); setShowRule(false); }}
+            rows={rows} />
+        )}
 
         <div className="max-h-[60vh] overflow-auto px-5 py-3">
           {tab === "ops" && (
@@ -222,6 +229,128 @@ function CountRow({ label, loaded, total, existing }: { label: string; loaded: n
         {existing ? <span>уже существует {existing}</span> : null}
         <span className="text-emerald-500">✓</span>
       </span>
+    </div>
+  );
+}
+
+// ---- Создать правило распределения (авто-назначение статьи/проекта/контрагента) ----
+const PARAMS: [string, string][] = [["counterparty", "Контрагент"], ["description", "Назначение платежа"], ["amount", "Сумма"], ["account", "Счёт"]];
+const TEXT_OPS: [string, string][] = [["contains", "содержит"], ["not_contains", "не содержит"], ["equals", "равно"], ["starts_with", "начинается с"]];
+const NUM_OPS: [string, string][] = [["gt", "больше"], ["lt", "меньше"], ["equals", "равно"]];
+interface Cond { param: string; op: string; value: string }
+
+function RuleModal({ companyId, rows, onClose, onApplied }: { companyId: number; rows: DetectRow[]; onClose: () => void; onApplied: (r: DetectRow[]) => void }) {
+  const cats = useCategories();
+  const parties = useCounterparties();
+  const projects = useProjects();
+  const [opType, setOpType] = useState<"income" | "outcome" | "move">("outcome");
+  const [conds, setConds] = useState<Cond[]>([{ param: "counterparty", op: "contains", value: "" }]);
+  const [useCat, setUseCat] = useState(true);
+  const [catId, setCatId] = useState<string>("");
+  const [useProj, setUseProj] = useState(false);
+  const [projId, setProjId] = useState<string>("");
+  const [useCp, setUseCp] = useState(false);
+  const [cpId, setCpId] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const opsFor = (p: string) => (p === "amount" ? NUM_OPS : TEXT_OPS);
+  const setCond = (i: number, patch: Partial<Cond>) => setConds((cs) => cs.map((c, idx) => idx === i ? { ...c, ...patch } : c));
+  const catList = cats.data?.filter((c) => opType === "income" ? c.kind === "income" : opType === "outcome" ? c.kind === "outcome" : true);
+
+  const save = async () => {
+    const actions: any = {};
+    if (useCat && catId) actions.category_id = Number(catId);
+    if (useProj && projId) actions.project_id = Number(projId);
+    if (useCp && cpId) actions.counterparty_id = Number(cpId);
+    if (!conds.some((c) => c.value.trim())) return setErr("Заполните значение условия");
+    if (!Object.keys(actions).length) return setErr("Выберите хотя бы одно действие (статья, проект или контрагент)");
+    setBusy(true); setErr("");
+    try {
+      await api.post("/api/distribution-rules", {
+        op_type: opType, scope: "bank",
+        conditions: conds.filter((c) => c.value.trim()), actions,
+      }, { params: { company_id: companyId } });
+      const applied = (await api.post("/api/distribution-rules/apply", { rows, scope: "bank" }, { params: { company_id: companyId } })).data;
+      onApplied(applied.rows);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Не удалось сохранить правило");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <div className="mt-10 w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Создать правило распределения <span className="ml-2 text-xs font-normal uppercase text-slate-400">Шаг 1 из 2</span></h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+
+        <div className="mb-4 rounded-md border p-3">
+          <div className="mb-2 text-sm font-semibold">Тип операции</div>
+          <div className="flex gap-5 text-sm">
+            {([["income", "Поступление"], ["outcome", "Выплата"], ["move", "Перемещение"]] as const).map(([v, l]) => (
+              <label key={v} className="flex items-center gap-2"><input type="radio" checked={opType === v} onChange={() => setOpType(v)} />{l}</label>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-4 rounded-md border p-3">
+          <div className="mb-2 text-sm font-semibold">Если у операции</div>
+          <div className="space-y-2">
+            {conds.map((c, i) => (
+              <div key={i} className="flex items-end gap-2">
+                <div className="flex-1"><div className="label">Параметр</div>
+                  <select className="input !py-1.5" value={c.param} onChange={(e) => setCond(i, { param: e.target.value, op: opsFor(e.target.value)[0][0] })}>
+                    {PARAMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select></div>
+                <div className="flex-1"><div className="label">Условие</div>
+                  <select className="input !py-1.5" value={c.op} onChange={(e) => setCond(i, { op: e.target.value })}>
+                    {opsFor(c.param).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select></div>
+                <div className="flex-1"><div className="label">Значение</div>
+                  <input className="input !py-1.5" value={c.value} onChange={(e) => setCond(i, { value: e.target.value })}
+                    placeholder={c.param === "amount" ? "10000" : "текст"} /></div>
+                {conds.length > 1 && <button className="pb-2 text-red-400 hover:text-red-600" onClick={() => setConds((cs) => cs.filter((_, idx) => idx !== i))}>✕</button>}
+              </div>
+            ))}
+          </div>
+          <button className="mt-2 text-sm text-brand hover:underline" onClick={() => setConds((cs) => [...cs, { param: "description", op: "contains", value: "" }])}>+ Добавить условие</button>
+        </div>
+
+        <div className="mb-4 rounded-md border p-3">
+          <div className="mb-2 text-sm font-semibold">То назначить операции</div>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              <label className="flex w-28 items-center gap-2"><input type="checkbox" checked={useCat} onChange={(e) => setUseCat(e.target.checked)} />Статья</label>
+              <select className="input !py-1.5" disabled={!useCat} value={catId} onChange={(e) => setCatId(e.target.value)}>
+                <option value="">— выберите статью —</option>
+                {catList?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex w-28 items-center gap-2"><input type="checkbox" checked={useProj} onChange={(e) => setUseProj(e.target.checked)} />Проект</label>
+              <select className="input !py-1.5" disabled={!useProj} value={projId} onChange={(e) => setProjId(e.target.value)}>
+                <option value="">— выберите проект —</option>
+                {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex w-28 items-center gap-2"><input type="checkbox" checked={useCp} onChange={(e) => setUseCp(e.target.checked)} />Контрагент</label>
+              <select className="input !py-1.5" disabled={!useCp} value={cpId} onChange={(e) => setCpId(e.target.value)}>
+                <option value="">— выберите контрагента —</option>
+                {parties.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {err && <div className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>}
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Отменить</button>
+          <button className="btn-primary" disabled={busy} onClick={save}>{busy ? "Сохранение…" : "Сохранить и применить"}</button>
+        </div>
+      </div>
     </div>
   );
 }
