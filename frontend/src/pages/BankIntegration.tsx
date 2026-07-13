@@ -1,45 +1,52 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, money } from "../api/client";
+import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
-import { useAccounts } from "../api/hooks";
-import { Modal } from "../components/Modal";
-import type { AccountBalance } from "../api/types";
+import { useAccounts, useLegalEntities } from "../api/hooks";
+import { ImportPreviewModal, SuccessModal } from "../components/ImportPreviewModal";
+import type { AccDecision, DetectResult } from "../components/ImportPreviewModal";
 
 interface Bank {
   slug: string; name: string; method: "token" | "oauth"; docs: string; hint: string;
   authorize?: string; scope?: string; color: string;
 }
-
 const BANKS: Bank[] = [
-  { slug: "tochka", name: "Точка", method: "token", docs: "https://developers.tochka.com/", color: "bg-violet-500",
-    hint: "В интернет-банке: «Интеграции и API» → создайте JWT-ключ с доступом к выпискам." },
-  { slug: "tbank", name: "Т-Банк", method: "token", docs: "https://developer.tbank.ru/", color: "bg-yellow-500",
-    hint: "В Т-Бизнесе выпустите токен T-API (Bearer) с доступом к счетам и выпискам." },
-  { slug: "modulbank", name: "Модульбанк", method: "token", docs: "https://modulbank.ru/api", color: "bg-indigo-500",
-    hint: "В личном кабинете → раздел API сгенерируйте токен." },
-  { slug: "blank", name: "Бланк", method: "token", docs: "https://blank.ru/", color: "bg-slate-800",
-    hint: "В кабинете банка получите API-токен." },
   { slug: "zenmoney", name: "Дзен-мани", method: "token", docs: "https://zenmoney.ru/", color: "bg-orange-500",
     hint: "В профиле Дзен-мани создайте API-токен." },
   { slug: "sber", name: "СберБизнес", method: "oauth", docs: "https://developers.sber.ru/docs/ru/sber-api/", color: "bg-emerald-600",
     authorize: "https://sbi.sberbank.ru:9443/ic/sso/api/v2/oauth/authorize", scope: "GET_STATEMENT_ACCOUNT",
-    hint: "Зарегистрируйте приложение (заявка на fintech_API@sberbank.ru), получите client_id и client_secret." },
+    hint: "Зарегистрируйте приложение (заявка fintech_API@sberbank.ru), получите client_id и client_secret." },
+  { slug: "tbank", name: "Т-Банк", method: "token", docs: "https://developer.tbank.ru/", color: "bg-yellow-500",
+    hint: "В Т-Бизнесе выпустите токен T-API (Bearer) с доступом к счетам и выпискам." },
+  { slug: "tochka", name: "Банк Точка", method: "token", docs: "https://developers.tochka.com/", color: "bg-violet-500",
+    hint: "В интернет-банке: «Интеграции и API» → создайте JWT-ключ с доступом к выпискам." },
   { slug: "alfa", name: "Альфа-Банк", method: "oauth", docs: "https://developers.alfabank.ru/", color: "bg-red-600",
     authorize: "https://oauth.alfabank.ru/authorize", scope: "accounts statements",
     hint: "Зарегистрируйте приложение в Альфа-Бизнес, получите client_id и client_secret." },
+  { slug: "modulbank", name: "Модульбанк", method: "token", docs: "https://modulbank.ru/api", color: "bg-indigo-500",
+    hint: "В личном кабинете → раздел API сгенерируйте токен." },
+  { slug: "blank", name: "Бланк", method: "token", docs: "https://blank.ru/", color: "bg-slate-800",
+    hint: "В кабинете банка получите API-токен." },
 ];
+const bankBy = (slug: string) => BANKS.find((b) => b.slug === slug)!;
+
+const SYNC_PERIODS = [["year", "За этот год"], ["all", "За всё время"], ["month", "С начала месяца"], ["quarter", "За последний квартал"]];
+const SYNC_FREQ = [["daily", "Один раз в день"], ["twice", "Несколько раз в день"], ["manual", "Вручную"]];
+
+// Решения по счетам из результата детекта: сопоставленные → existing, ненайденные → создать новый
+export const decisionsFromDetect = (d: DetectResult): AccDecision[] =>
+  d.accounts.map((a) => a.matched_app_account_id
+    ? { bank_account: a.bank_account, app_account_id: a.matched_app_account_id }
+    : { bank_account: a.bank_account, create: true, create_name: a.suggest_name || a.bank_account });
 
 export function BankIntegration() {
   const { companyId } = useApp();
   const qc = useQueryClient();
-  const accounts = useAccounts();
-  const [editing, setEditing] = useState<{ bank: Bank; conn?: any } | null>(null);
-  const balances = useQuery({
-    queryKey: ["balances", companyId], enabled: !!companyId,
-    queryFn: async () => (await api.get<AccountBalance[]>("/api/account-balances", { params: { company_id: companyId } })).data,
-  });
+  const [tab, setTab] = useState<"direct" | "email">("direct");
+  const [wizard, setWizard] = useState<{ bank: Bank; conn?: any } | null>(null);
+  const [syncFor, setSyncFor] = useState<any | null>(null);
+
   const conns = useQuery({
     queryKey: ["bank-connections", companyId], enabled: !!companyId,
     queryFn: async () => (await api.get<any[]>("/api/bank-connections", { params: { company_id: companyId } })).data,
@@ -49,166 +56,380 @@ export function BankIntegration() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["bank-connections"] }),
   });
   const connsOf = (slug: string) => (conns.data ?? []).filter((c) => c.bank === slug);
-  const statusBadge = (s: string) =>
-    s === "connected" ? <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Подключён</span>
-      : <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Требуется авторизация</span>;
+  const refresh = () => { qc.invalidateQueries({ queryKey: ["bank-connections"] }); qc.invalidateQueries({ queryKey: ["accounts"] }); qc.invalidateQueries({ queryKey: ["operations"] }); };
 
   return (
     <div className="max-w-4xl space-y-4">
-      <h1 className="text-2xl font-bold">Банки и карты</h1>
-      <p className="text-sm text-slate-500">
-        Подключите банк по API и сопоставьте счета банка со счетами в приложении — движения
-        (приход, расход, перемещения) будут поступать на нужный счёт. Для одного банка можно создать
-        несколько подключений (например, разные юрлица). Также данные можно загрузить вручную через
-        <a className="ml-1 text-brand hover:underline" href="/import">Импорт</a>.
-      </p>
+      <h1 className="text-2xl font-bold">Банки и карты физлиц</h1>
 
-      <div className="space-y-3">
-        {BANKS.map((b) => {
-          const list = connsOf(b.slug);
-          return (
-            <div key={b.slug} className="card p-0">
-              <div className="flex items-center gap-3 border-b p-3">
-                <span className={`flex h-8 w-8 items-center justify-center rounded-md text-sm font-bold text-white ${b.color}`}>{b.name[0]}</span>
-                <div className="flex-1">
-                  <div className="font-medium">{b.name}</div>
-                  <div className="text-xs text-slate-400">{b.method === "token" ? "Подключение по API-токену" : "Подключение по OAuth 2.0"}</div>
-                </div>
-                <button className="btn-ghost" onClick={() => setEditing({ bank: b })}>+ Добавить подключение</button>
-              </div>
-              {list.length === 0 ? (
-                <div className="px-4 py-3 text-sm text-slate-400">Нет подключений — нажмите «Добавить подключение».</div>
-              ) : (
-                <div className="divide-y">
-                  {list.map((c) => (
-                    <div key={c.id} className="p-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="font-medium">{c.title || "(без названия)"}</span>
-                        {statusBadge(c.status)}
-                        <div className="ml-auto flex gap-3 text-sm">
-                          <button className="text-brand hover:underline" onClick={() => setEditing({ bank: b, conn: c })}>Настроить</button>
-                          <button className="text-red-500 hover:underline" onClick={() => confirm("Удалить подключение?") && del.mutate(c.id)}>Отключить</button>
-                        </div>
-                      </div>
-                      <MappingsSection connId={c.id} accounts={accounts.data ?? []} balances={balances.data ?? []} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+      <div className="flex gap-4 border-b text-sm">
+        <button onClick={() => setTab("direct")} className={`-mb-px border-b-2 pb-2 font-medium ${tab === "direct" ? "border-brand text-brand" : "border-transparent text-slate-500"}`}>Прямая интеграция</button>
+        <button onClick={() => setTab("email")} className={`-mb-px border-b-2 pb-2 font-medium ${tab === "email" ? "border-brand text-brand" : "border-transparent text-slate-500"}`}>Обработка выписок по E-mail</button>
       </div>
-      <p className="text-xs text-slate-400">Вашего банка нет в списке? Загрузите выписку через раздел «Импорт» (Excel/CSV, 1С, Тинькофф, Сбер).</p>
 
-      {editing && (
-        <ConnectModal bank={editing.bank} conn={editing.conn} companyId={companyId}
-          onClose={() => setEditing(null)}
-          onSaved={() => { qc.invalidateQueries({ queryKey: ["bank-connections"] }); setEditing(null); }} />
+      {tab === "email" ? (
+        <div className="card text-sm text-slate-600">
+          <p>Пересылайте выписки из банка на адрес обработки — операции будут распознаны и предложены к загрузке.
+          Пока доступна загрузка вручную через раздел <a className="text-brand hover:underline" href="/import">Импорт</a>.</p>
+        </div>
+      ) : (
+        <>
+          <p className="text-sm text-slate-500">
+            Сократите время на ввод данных с помощью автоматической загрузки платежей — для этого подключите банк.
+            Чтобы приложение само назначало операциям статьи и проекты, используйте <a className="text-brand hover:underline" href="/import">правила обработки платежей</a>.
+          </p>
+
+          <div className="card p-0">
+            <div className="grid grid-cols-[2fr_2fr_2fr_auto] gap-2 border-b bg-slate-50 px-4 py-2 text-xs font-semibold uppercase text-slate-400">
+              <div>Банк</div><div>Юрлицо / Кабинет</div><div>Статус подключения</div><div>Действия</div>
+            </div>
+            {BANKS.map((b) => {
+              const list = connsOf(b.slug);
+              return (
+                <div key={b.slug} className="border-b last:border-0">
+                  {list.length === 0 ? (
+                    <div className="grid grid-cols-[2fr_2fr_2fr_auto] items-center gap-2 px-4 py-3">
+                      <BankName b={b} />
+                      <div className="text-sm text-slate-400">—</div>
+                      <div className="text-sm text-slate-500">Можно подключить</div>
+                      <button className="btn-primary !py-1.5" onClick={() => setWizard({ bank: b })}>Подключить</button>
+                    </div>
+                  ) : (
+                    <div className="px-4 py-3">
+                      {list.map((c, i) => (
+                        <ConnRow key={c.id} bank={b} conn={c} first={i === 0}
+                          onSync={() => setSyncFor(c)} onSettings={() => setWizard({ bank: b, conn: c })}
+                          onDelete={() => confirm("Отключить банк? Сопоставления счетов будут удалены.") && del.mutate(c.id)} />
+                      ))}
+                      <button className="mt-2 flex items-center gap-1 text-sm text-brand hover:underline" onClick={() => setWizard({ bank: b })}>
+                        <span className="text-base leading-none">⊕</span> Подключить юрлицо
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-slate-400">Вашего банка нет в списке? Загрузите выписку через раздел «Импорт» (Excel/CSV, 1С, Тинькофф, Сбер).</p>
+        </>
+      )}
+
+      {wizard && (
+        <ConnectWizard bank={wizard.bank} conn={wizard.conn} companyId={companyId!}
+          onClose={() => setWizard(null)} onDone={() => { refresh(); }} />
+      )}
+      {syncFor && (
+        <SyncUpload conn={syncFor} bank={bankBy(syncFor.bank)} companyId={companyId!}
+          onClose={() => setSyncFor(null)} onDone={refresh} />
       )}
     </div>
   );
 }
 
-// Сопоставление счетов банка со счетами приложения (несколько на подключение)
-function MappingsSection({ connId, accounts, balances }: any) {
-  const qc = useQueryClient();
-  const maps = useQuery({ queryKey: ["bank-maps", connId], queryFn: async () => (await api.get(`/api/bank-connections/${connId}/accounts`)).data as any[] });
-  const [ba, setBa] = useState("");
-  const [acc, setAcc] = useState("");
-  const inv = () => qc.invalidateQueries({ queryKey: ["bank-maps", connId] });
-  const add = useMutation({ mutationFn: () => api.post(`/api/bank-connections/${connId}/accounts`, { bank_account: ba, account_id: acc ? Number(acc) : null }), onSuccess: () => { setBa(""); setAcc(""); inv(); } });
-  const upd = useMutation({ mutationFn: (v: any) => api.put(`/api/bank-connections/accounts/${v.id}`, { bank_account: v.bank_account, account_id: v.account_id }), onSuccess: inv });
-  const del = useMutation({ mutationFn: (id: number) => api.delete(`/api/bank-connections/accounts/${id}`), onSuccess: inv });
-  const balOf = (accId?: number | null) => balances.find((x: any) => x.account_id === accId)?.balance;
-
+function BankName({ b }: { b: Bank }) {
   return (
-    <div className="rounded-md bg-slate-50 p-3">
-      <div className="mb-1 text-xs font-semibold uppercase text-slate-400">Счета банка → счёт в приложении</div>
-      <table className="table text-sm">
-        <thead><tr><th>Счёт в банке</th><th>Счёт в приложении</th><th className="text-right">Остаток</th><th>Движения</th><th></th></tr></thead>
-        <tbody>
-          {maps.data?.map((m) => (
-            <tr key={m.id}>
-              <td className="font-mono">{m.bank_account}</td>
-              <td>
-                <select className="input !w-52" value={m.account_id ?? ""} onChange={(e) => upd.mutate({ id: m.id, bank_account: m.bank_account, account_id: e.target.value ? Number(e.target.value) : null })}>
-                  <option value="">— не выбран —</option>
-                  {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </td>
-              <td className="text-right">{m.account_id ? money(balOf(m.account_id) ?? 0) : "—"}</td>
-              <td>{m.account_id ? <Link className="text-brand hover:underline" to={`/operations?account_id=${m.account_id}`}>Приход/расход →</Link> : <span className="text-slate-300">—</span>}</td>
-              <td className="text-right"><button className="text-red-400 hover:text-red-600" onClick={() => del.mutate(m.id)}>×</button></td>
-            </tr>
-          ))}
-          {maps.data?.length === 0 && <tr><td colSpan={5} className="py-2 text-center text-slate-400">Счета банка ещё не сопоставлены</td></tr>}
-        </tbody>
-      </table>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        <div><div className="label">Счёт в банке (номер/название)</div>
-          <input className="input font-mono" value={ba} onChange={(e) => setBa(e.target.value)} placeholder="40702810…" /></div>
-        <div><div className="label">Счёт в приложении</div>
-          <select className="input" value={acc} onChange={(e) => setAcc(e.target.value)}>
-            <option value="">— выберите —</option>
-            {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select></div>
-        <button className="btn-ghost" disabled={!ba.trim() || add.isPending} onClick={() => add.mutate()}>+ Добавить счёт банка</button>
+    <div className="flex items-center gap-3">
+      <span className={`flex h-8 w-8 items-center justify-center rounded-md text-sm font-bold text-white ${b.color}`}>{b.name[0]}</span>
+      <span className="font-medium">{b.name}</span>
+    </div>
+  );
+}
+
+// Строка подключённого юрлица: юрлицо, счетов N, статус, действия ⟳ ⚙ ✕
+function ConnRow({ bank, conn, first, onSync, onSettings, onDelete }: any) {
+  const maps = useQuery({ queryKey: ["bank-maps", conn.id], queryFn: async () => (await api.get(`/api/bank-connections/${conn.id}/accounts`)).data as any[] });
+  const n = maps.data?.length ?? 0;
+  return (
+    <div className="grid grid-cols-[2fr_2fr_2fr_auto] items-center gap-2 py-2">
+      <div>{first ? <BankName b={bank} /> : <span className="pl-11 text-sm text-slate-400">↳</span>}</div>
+      <div>
+        <div className="text-sm font-medium">{conn.title || "(без названия)"}</div>
+        <div className="text-xs text-slate-400">Подключено счетов: {n}</div>
+      </div>
+      <div>
+        <div className="text-sm text-emerald-600">Подключён к приложению</div>
+        <div className="text-xs text-slate-400">Синхронизация раз в день</div>
+      </div>
+      <div className="flex items-center gap-3 text-slate-400">
+        <button title="Получить новые операции" className="hover:text-brand" onClick={onSync}>⟳</button>
+        <button title="Настройки подключения" className="hover:text-brand" onClick={onSettings}>⚙</button>
+        <button title="Отключить" className="hover:text-red-500" onClick={onDelete}>✕</button>
       </div>
     </div>
   );
 }
 
-function ConnectModal({ bank, conn, companyId, onClose, onSaved }: any) {
+// ---------- Мастер подключения (3 шага) ----------
+function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank; conn?: any; companyId: number; onClose: () => void; onDone: () => void }) {
+  const entities = useLegalEntities();
+  const accounts = useAccounts();
+  const [step, setStep] = useState(1);
   const [title, setTitle] = useState(conn?.title ?? "");
+  const [legalEntityId, setLegalEntityId] = useState<number | null>(conn?.legal_entity_id ?? null);
+  const [inn, setInn] = useState("");
+  const [kpp, setKpp] = useState("");
   const [token, setToken] = useState("");
   const [clientId, setClientId] = useState(conn?.client_id ?? "");
   const [clientSecret, setClientSecret] = useState("");
-  const body = () => ({ bank: bank.slug, title: title || null, token: token || null, client_id: clientId || null, client_secret: clientSecret || null });
-  const save = useMutation({
-    mutationFn: () => conn ? api.put(`/api/bank-connections/${conn.id}`, body()) : api.post("/api/bank-connections", body(), { params: { company_id: companyId } }),
-    onSuccess: onSaved,
-  });
-  const authorizeUrl = () => {
-    const redirect = `${location.origin}/bank-oauth-callback`;
-    const p = new URLSearchParams({ response_type: "code", client_id: clientId, scope: bank.scope || "", redirect_uri: redirect, state: `${bank.slug}:${conn?.id ?? "new"}` });
-    return `${bank.authorize}?${p.toString()}`;
-  };
-  return (
-    <Modal title={`${conn ? "Настройка" : "Новое подключение"} — ${bank.name}`} onClose={onClose} wide>
-      <div className="space-y-4">
-        <div>
-          <label className="label">Название подключения</label>
-          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: ООО «Ромашка»" />
-          <p className="mt-1 text-xs text-slate-400">Счета этого банка сопоставляются со счетами приложения после сохранения — в карточке подключения.</p>
-        </div>
-        <p className="text-sm text-slate-500">{bank.hint} <a className="text-brand hover:underline" href={bank.docs} target="_blank" rel="noreferrer">Документация API →</a></p>
+  const [period, setPeriod] = useState("year");
+  const [freq, setFreq] = useState("daily");
+  const [detect, setDetect] = useState<DetectResult | null>(null);
+  const [decisions, setDecisions] = useState<Record<string, { selected: boolean; mode: "existing" | "new"; app_account_id?: number; create_name?: string }>>({});
+  const [busy, setBusy] = useState(false);
+  const [connected, setConnected] = useState<{ decisions: AccDecision[] } | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [autoResult, setAutoResult] = useState<any>(null);
 
-        {bank.method === "token" ? (
-          <div>
-            <label className="label">API-токен</label>
-            <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)}
-              placeholder={conn?.token_mask ?? "Вставьте токен из кабинета банка"} />
-            {conn?.has_token && <p className="mt-1 text-xs text-slate-400">Текущий токен: {conn.token_mask} (введите новый, чтобы заменить)</p>}
+  const pickEntity = (id: number | null) => {
+    setLegalEntityId(id);
+    const e = entities.data?.find((x) => x.id === id);
+    if (e) { setTitle(e.name); setInn(e.inn ?? ""); setKpp(e.kpp ?? ""); }
+  };
+
+  const onFile = async (file: File) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("bank", bank.slug);
+      const d = (await api.post<DetectResult>("/api/imports/bank-detect", fd, { params: { company_id: companyId } })).data;
+      setDetect(d);
+      const init: any = {};
+      for (const a of d.accounts) {
+        init[a.bank_account] = a.matched_app_account_id
+          ? { selected: true, mode: "existing", app_account_id: a.matched_app_account_id }
+          : { selected: true, mode: "new", create_name: a.suggest_name || a.bank_account };
+      }
+      setDecisions(init);
+    } finally { setBusy(false); }
+  };
+
+  const buildDecisions = (): AccDecision[] =>
+    Object.entries(decisions).filter(([, v]) => v.selected).map(([bank_account, v]) =>
+      v.mode === "existing" ? { bank_account, app_account_id: v.app_account_id } : { bank_account, create: true, create_name: v.create_name });
+
+  const finish = async () => {
+    setBusy(true);
+    try {
+      // 1) подключение
+      const connBody = { bank: bank.slug, title: title || null, token: token || null, client_id: clientId || null, client_secret: clientSecret || null };
+      const c = conn
+        ? (await api.put(`/api/bank-connections/${conn.id}`, connBody)).data
+        : (await api.post("/api/bank-connections", connBody, { params: { company_id: companyId } })).data;
+      // 2) счета: создать недостающие + сопоставления. Итоговые решения — уже existing.
+      const finalDec: AccDecision[] = [];
+      let firstAcc: number | null = null;
+      for (const [bank_account, v] of Object.entries(decisions)) {
+        if (!v.selected) continue;
+        let accId = v.app_account_id ?? null;
+        if (v.mode === "new") {
+          accId = (await api.post("/api/accounts", { name: v.create_name || bank_account, kind: "bank", legal_entity_id: legalEntityId }, { params: { company_id: companyId } })).data.id;
+        }
+        if (accId) {
+          await api.post(`/api/bank-connections/${c.id}/accounts`, { bank_account, account_id: accId });
+          finalDec.push({ bank_account, app_account_id: accId });
+          firstAcc ??= accId;
+        }
+      }
+      if (firstAcc) await api.put(`/api/bank-connections/${c.id}`, { ...connBody, account_id: firstAcc });
+      onDone();
+      setConnected({ decisions: finalDec });
+    } finally { setBusy(false); }
+  };
+
+  const continueWork = async () => {
+    // «Продолжить работу»: авто-загрузка без ручного распределения
+    if (detect && connected) {
+      setBusy(true);
+      try {
+        const res = (await api.post("/api/imports/commit", {
+          source: bank.slug, filename: detect.filename, legal_entity_id: legalEntityId,
+          accounts: connected.decisions, rows: detect.rows,
+        }, { params: { company_id: companyId } })).data;
+        onDone();
+        setAutoResult(res);
+      } finally { setBusy(false); }
+    } else { onClose(); }
+  };
+
+  // Экран распределения (предпросмотр)
+  if (showPreview && detect && connected)
+    return <ImportPreviewModal companyId={companyId} source={bank.slug} detect={detect}
+      accounts={connected.decisions} legalEntityId={legalEntityId} onClose={onClose} onDone={onDone} />;
+  if (autoResult) return <SuccessModal result={autoResult} onClose={onClose} />;
+
+  // Модалка «Интеграция успешно подключена»
+  if (connected) {
+    return (
+      <Overlay>
+        <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+          <div className="mb-3 flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">✓</span>
+            <h3 className="text-lg font-semibold">Интеграция успешно подключена</h3></div>
+          <p className="text-sm text-slate-600">Операции скоро начнут автоматически загружаться. Нажмите «Продолжить работу», чтобы закрыть это окно.</p>
+          <p className="mt-2 text-sm text-slate-600">Если хотите предварительно посмотреть платежи для загрузки или указать им статьи и проекты — нажмите «Распределить операции».</p>
+          <div className="mt-5 flex items-center justify-between">
+            <button className="text-brand hover:underline disabled:opacity-40" disabled={!detect || busy} onClick={() => setShowPreview(true)}>Распределить операции</button>
+            <button className="btn-primary" disabled={busy} onClick={continueWork}>{busy ? "Загрузка…" : "Продолжить работу"}</button>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div><label className="label">client_id</label>
-              <input className="input font-mono" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Идентификатор приложения" /></div>
-            <div><label className="label">client_secret</label>
-              <input className="input font-mono" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)}
-                placeholder={conn?.has_secret ? "•••• (введите новый, чтобы заменить)" : "Секрет приложения"} /></div>
-            <a className={`btn-ghost inline-block ${clientId ? "" : "pointer-events-none opacity-40"}`}
-              href={clientId ? authorizeUrl() : "#"} target="_blank" rel="noreferrer">Перейти к авторизации в банке →</a>
+        </div>
+      </Overlay>
+    );
+  }
+
+  const Stepper = (
+    <div className="mb-5 flex items-center gap-2 text-sm">
+      {[["1", "Начало подключения"], ["2", "Авторизация в банке"], ["3", "Настройка счетов"]].map(([n, label], i) => (
+        <div key={n} className="flex items-center gap-2">
+          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${step >= i + 1 ? "bg-brand text-white" : "bg-slate-200 text-slate-500"}`}>{n}</span>
+          <span className={step === i + 1 ? "font-medium" : "text-slate-400"}>{label}</span>
+          {i < 2 && <span className="mx-1 text-slate-300">···</span>}
+        </div>
+      ))}
+    </div>
+  );
+  const Header = (
+    <div className="mb-4 flex items-center gap-3">
+      <span className={`flex h-10 w-10 items-center justify-center rounded-md text-lg font-bold text-white ${bank.color}`}>{bank.name[0]}</span>
+      <h3 className="text-xl font-bold">{bank.name}</h3>
+    </div>
+  );
+
+  return (
+    <Overlay>
+      <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-start justify-between">
+          <div className="text-xs font-semibold uppercase text-slate-400">Подключение банка — шаг {step} из 3</div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+        {Stepper}
+        {Header}
+
+        {step === 1 && (
+          <div className="space-y-4">
+            <p className="font-medium">Введите ИНН юрлица, счета которого нужно подключить.</p>
+            <p className="text-sm text-slate-500">{bank.method === "oauth" ? `На следующем шаге вы будете перенаправлены на сайт ${bank.name}.` : `На следующем шаге вставьте API-токен из кабинета ${bank.name}.`}</p>
+            <div className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-700">Приложение не хранит ваши данные для входа в банк, подключение безопасно. Вы всегда сможете отключить банк.</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Ваше юр. лицо</label>
+                <select className="input" value={legalEntityId ?? ""} onChange={(e) => pickEntity(e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">— выберите или заполните вручную —</option>
+                  {entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              </div>
+              <div><label className="label">Название подключения</label>
+                <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="ООО «Ромашка»" /></div>
+              <div><label className="label">ИНН</label><input className="input font-mono" value={inn} onChange={(e) => setInn(e.target.value)} placeholder="1841041254" /></div>
+              <div><label className="label">КПП</label><input className="input font-mono" value={kpp} onChange={(e) => setKpp(e.target.value)} placeholder="184101001" /></div>
+            </div>
+            <div className="flex justify-end"><button className="btn-primary" onClick={() => setStep(2)}>Следующий шаг</button></div>
           </div>
         )}
 
-        {save.error && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{(save.error as any)?.response?.data?.detail || "Не удалось сохранить"}</div>}
-        <div className="flex justify-end gap-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохранение…" : "Сохранить"}</button>
-        </div>
+        {step === 2 && (
+          <div className="space-y-4">
+            <p className="font-medium">Авторизация в банке</p>
+            <p className="text-sm text-slate-500">{bank.hint} <a className="text-brand hover:underline" href={bank.docs} target="_blank" rel="noreferrer">Документация API →</a></p>
+            {bank.method === "token" ? (
+              <div><label className="label">API-токен</label>
+                <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Вставьте токен из кабинета банка" /></div>
+            ) : (
+              <div className="space-y-3">
+                <div><label className="label">client_id</label><input className="input font-mono" value={clientId} onChange={(e) => setClientId(e.target.value)} /></div>
+                <div><label className="label">client_secret</label><input className="input font-mono" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} /></div>
+                <a className={`btn-ghost inline-block ${clientId ? "" : "pointer-events-none opacity-40"}`} target="_blank" rel="noreferrer"
+                  href={clientId ? `${bank.authorize}?response_type=code&client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(bank.scope || "")}&redirect_uri=${encodeURIComponent(location.origin + "/bank-oauth-callback")}` : "#"}>
+                  Перейти к авторизации в банке →</a>
+                <p className="text-xs text-slate-400">После авторизации вернитесь и нажмите «Следующий шаг».</p>
+              </div>
+            )}
+            <div className="flex justify-between"><button className="btn-ghost" onClick={() => setStep(1)}>Назад</button>
+              <button className="btn-primary" onClick={() => setStep(3)}>Следующий шаг</button></div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="space-y-4">
+            <p className="font-medium">Выберите счета для синхронизации.</p>
+            <p className="text-sm text-slate-500">Приложение добавит платежи по этим счетам за период, который вы укажете в поле «Начало синхронизации». Загрузите выписку банка (CSV/XLSX/1С), чтобы распознать счета и операции.</p>
+
+            {!detect ? (
+              <label className="flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed border-slate-200 py-8 text-sm text-slate-500 hover:border-brand">
+                <span className="text-2xl">📄</span>
+                {busy ? "Распознаём…" : "Нажмите, чтобы выбрать файл выписки"}
+                <input type="file" className="hidden" accept=".csv,.xlsx,.xlsm,.txt" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+              </label>
+            ) : (
+              <>
+                <div className="text-xs text-slate-400">Распознано операций: {detect.totals.count}. Счетов в выписке: {detect.accounts.length}.</div>
+                <div className="grid grid-cols-[auto_1fr_1fr] items-center gap-x-3 gap-y-2">
+                  <div className="text-xs font-semibold uppercase text-slate-400">Счёт в банке</div>
+                  <div className="col-span-2 text-xs font-semibold uppercase text-slate-400">Счёт в приложении</div>
+                  {detect.accounts.map((a) => {
+                    const d = decisions[a.bank_account] || { selected: true, mode: "new", create_name: a.suggest_name };
+                    const set = (patch: any) => setDecisions((s) => ({ ...s, [a.bank_account]: { ...d, ...patch } }));
+                    const sel = d.mode === "existing" ? String(d.app_account_id ?? "") : "__new__";
+                    return (
+                      <div key={a.bank_account} className="contents">
+                        <label className="flex items-center gap-2 py-1"><input type="checkbox" checked={d.selected} onChange={(e) => set({ selected: e.target.checked })} />
+                          <span className="font-mono text-xs">{a.bank_account}</span></label>
+                        <select className="input !py-1.5" value={sel}
+                          onChange={(e) => e.target.value === "__new__" ? set({ mode: "new", create_name: d.create_name || a.suggest_name }) : set({ mode: "existing", app_account_id: Number(e.target.value) })}>
+                          <option value="__new__">＋ Создать новый счёт</option>
+                          {accounts.data?.map((ac) => <option key={ac.id} value={ac.id}>{ac.name}</option>)}
+                        </select>
+                        {d.mode === "new"
+                          ? <input className="input !py-1.5" value={d.create_name ?? ""} onChange={(e) => set({ create_name: e.target.value })} placeholder="Название нового счёта" />
+                          : <span className="text-xs text-emerald-600">✓ сопоставлен по реквизитам</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-2 gap-3 border-t pt-3">
+                  <div><label className="label">Начало синхронизации</label>
+                    <select className="input" value={period} onChange={(e) => setPeriod(e.target.value)}>{SYNC_PERIODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                  <div><label className="label">Частота синхронизации счетов</label>
+                    <select className="input" value={freq} onChange={(e) => setFreq(e.target.value)}>{SYNC_FREQ.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                </div>
+              </>
+            )}
+            <div className="flex justify-between"><button className="btn-ghost" onClick={() => setStep(2)}>Назад</button>
+              <button className="btn-primary" disabled={busy} onClick={finish}>{busy ? "Подключаем…" : "Завершить подключение"}</button></div>
+          </div>
+        )}
       </div>
-    </Modal>
+    </Overlay>
   );
+}
+
+// ⟳ Получить новые операции: загрузка выписки → предпросмотр по существующим сопоставлениям
+function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
+  const [detect, setDetect] = useState<DetectResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const onFile = async (file: File) => {
+    setBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", file); fd.append("bank", bank.slug); fd.append("connection_id", String(conn.id));
+      setDetect((await api.post<DetectResult>("/api/imports/bank-detect", fd, { params: { company_id: companyId } })).data);
+    } finally { setBusy(false); }
+  };
+  if (detect)
+    return <ImportPreviewModal companyId={companyId} source={bank.slug} detect={detect}
+      accounts={decisionsFromDetect(detect)} legalEntityId={conn.legal_entity_id ?? null} onClose={onClose} onDone={onDone} />;
+  return (
+    <Overlay>
+      <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+        <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-semibold">Получить новые операции — {bank.name}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button></div>
+        <label className="flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed border-slate-200 py-8 text-sm text-slate-500 hover:border-brand">
+          <span className="text-2xl">📄</span>{busy ? "Распознаём…" : "Загрузите свежую выписку банка"}
+          <input type="file" className="hidden" accept=".csv,.xlsx,.xlsm,.txt" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+        </label>
+      </div>
+    </Overlay>
+  );
+}
+
+function Overlay({ children }: { children: ReactNode }) {
+  return <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"><div className="mt-10 w-full max-w-2xl">{children}</div></div>;
 }

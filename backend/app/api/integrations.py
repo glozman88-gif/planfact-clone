@@ -70,8 +70,8 @@ async def create_connection(payload: BankConnIn, db: DbDep, _: CurrentUser, comp
     method = BANK_METHOD.get(payload.bank)
     if method is None:
         raise HTTPException(400, "Неизвестный банк")
-    if method == "token" and not payload.token:
-        raise HTTPException(400, "Укажите API-токен")
+    # Токен не обязателен на этапе создания: подключение можно завершить, а операции
+    # загрузить из выписки (self-hosted). Без токена статус подключения — «pending».
     conn = BankConnection(company_id=company_id, bank=payload.bank, method=method)
     _apply(conn, payload)
     db.add(conn)
