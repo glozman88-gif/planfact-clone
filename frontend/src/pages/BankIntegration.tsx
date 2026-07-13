@@ -193,9 +193,12 @@ function ConnRow({ bank, conn, first, onSync, onSettings, onDelete }: any) {
 function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { bank: Bank; conn?: any; startStep?: number; companyId: number; onClose: () => void; onDone: () => void }) {
   const entities = useLegalEntities();
   const accounts = useAccounts();
-  const [step, setStep] = useState(startStep ?? 1);
+  const isTokenBank = TOKEN_BANKS.has(bank.slug);
+  // Токен-банки: сразу ввод токена (шаг 2), ИНН/КПП/юрлицо не спрашиваем — определяем из банка
+  const [step, setStep] = useState(startStep ?? (isTokenBank ? 2 : 1));
   const [title, setTitle] = useState(conn?.title ?? "");
   const [legalEntityId, setLegalEntityId] = useState<number | null>(conn?.legal_entity_id ?? null);
+  const [companyInfo, setCompanyInfo] = useState<any>(null);   // реквизиты организации из банка
   const [inn, setInn] = useState("");
   const [kpp, setKpp] = useState("");
   const [period, setPeriod] = useState("year");
@@ -205,7 +208,6 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
   const [decisions, setDecisions] = useState<Record<string, { selected: boolean; mode: "existing" | "new"; app_account_id?: number; create_name?: string }>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const isTokenBank = TOKEN_BANKS.has(bank.slug);
   const [token, setToken] = useState("");
   const bankInfo = useQuery({ queryKey: ["bank-info", bank.slug], enabled: isTokenBank, queryFn: async () => (await api.get(`/api/banks/${bank.slug}/info`)).data as any });
 
@@ -229,7 +231,8 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
     try {
       const res = (await api.post(`/api/banks/${bank.slug}/accounts`, { token: token.trim() }, { params: { company_id: companyId } })).data;
       setStepAccounts(res.accounts); initDecisions(res.accounts);
-      if (res.legal_entity_id) { setLegalEntityId(res.legal_entity_id); entities.refetch(); if (res.company?.name) setTitle(res.company.name); }
+      if (res.legal_entity_id) { setLegalEntityId(res.legal_entity_id); entities.refetch(); }
+      if (res.company) { setCompanyInfo(res.company); if (res.company.name) setTitle(res.company.name); }
       setStep(3);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || "Не удалось выгрузить счета по токену");
@@ -364,13 +367,16 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
     );
   }
 
+  const STEPS: [string, string, number][] = isTokenBank
+    ? [["1", "Подключение по токену", 2], ["2", "Настройка счетов", 3]]
+    : [["1", "Начало подключения", 1], ["2", "Авторизация в банке", 2], ["3", "Настройка счетов", 3]];
   const Stepper = (
     <div className="mb-5 flex items-center gap-2 text-sm">
-      {[["1", "Начало подключения"], ["2", "Авторизация в банке"], ["3", "Настройка счетов"]].map(([n, label], i) => (
+      {STEPS.map(([n, label, sv], i) => (
         <div key={n} className="flex items-center gap-2">
-          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${step >= i + 1 ? "bg-brand text-white" : "bg-slate-200 text-slate-500"}`}>{n}</span>
-          <span className={step === i + 1 ? "font-medium" : "text-slate-400"}>{label}</span>
-          {i < 2 && <span className="mx-1 text-slate-300">···</span>}
+          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${step >= sv ? "bg-brand text-white" : "bg-slate-200 text-slate-500"}`}>{n}</span>
+          <span className={step === sv ? "font-medium" : "text-slate-400"}>{label}</span>
+          {i < STEPS.length - 1 && <span className="mx-1 text-slate-300">···</span>}
         </div>
       ))}
     </div>
@@ -386,7 +392,7 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
     <Overlay>
       <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-start justify-between">
-          <div className="text-xs font-semibold uppercase text-slate-400">Подключение банка — шаг {step} из 3</div>
+          <div className="text-xs font-semibold uppercase text-slate-400">Подключение банка — шаг {isTokenBank ? (step === 2 ? 1 : 2) : step} из {isTokenBank ? 2 : 3}</div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
         </div>
         {Stepper}
@@ -417,7 +423,7 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
         {step === 2 && isTokenBank && (
           <BankTokenStep bankName={bank.name} info={bankInfo.data}
             token={token} setToken={setToken} busy={busy} err={err}
-            onBack={() => setStep(1)} onConnect={connectToken} />
+            onBack={onClose} onConnect={connectToken} />
         )}
         {step === 2 && !isTokenBank && !authScreen && (
           <div className="space-y-4">
@@ -486,12 +492,21 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
                   })}
                 </div>
                 <div className="border-t pt-3">
-                  <label className="label">Юрлицо для новых счетов <span className="text-red-500">*</span></label>
-                  <select className="input" value={legalEntityId ?? ""} onChange={(e) => setLegalEntityId(e.target.value ? Number(e.target.value) : null)}>
-                    <option value="">— выберите юрлицо —</option>
-                    {entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                  </select>
-                  <p className="mt-1 text-xs text-slate-400">Создаваемые счёта будут привязаны к этому юрлицу (обязательно).</p>
+                  {isTokenBank && legalEntityId ? (
+                    <div className="rounded-md bg-emerald-50 px-3 py-2 text-sm">
+                      <div className="font-medium text-emerald-700">Юрлицо определено из банка: {companyInfo?.name || entities.data?.find((x) => x.id === legalEntityId)?.name}</div>
+                      {companyInfo?.inn && <div className="text-xs text-emerald-600">ИНН {companyInfo.inn}{companyInfo.kpp ? ` · КПП ${companyInfo.kpp}` : ""} — реквизиты подставлены автоматически. Счета привяжутся к нему.</div>}
+                    </div>
+                  ) : (
+                    <>
+                      <label className="label">Юрлицо для новых счетов <span className="text-red-500">*</span></label>
+                      <select className="input" value={legalEntityId ?? ""} onChange={(e) => setLegalEntityId(e.target.value ? Number(e.target.value) : null)}>
+                        <option value="">— выберите юрлицо —</option>
+                        {entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-400">Создаваемые счёта будут привязаны к этому юрлицу (обязательно).</p>
+                    </>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div><label className="label">Начало синхронизации</label>
