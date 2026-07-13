@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-from app.api import auth, bank_oauth, budgets, companies, deals, dictionaries, imports, imports_bank, integrations, operations, quickfilters, recurring, reports, rules, tbank
+from app.api import auth, bank_oauth, banks, budgets, companies, deals, dictionaries, imports, imports_bank, integrations, operations, quickfilters, recurring, reports, rules, tbank
 from app.core.config import settings
 
 app = FastAPI(title="ПланФакт-аналог", version="0.1.0")
@@ -34,6 +34,7 @@ app.include_router(recurring.router)
 app.include_router(integrations.router)
 app.include_router(bank_oauth.router)
 app.include_router(tbank.router)
+app.include_router(banks.router)
 app.include_router(quickfilters.router)
 
 
