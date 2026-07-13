@@ -30,6 +30,18 @@ export function Deals() {
     mutationFn: (body: any) => api.post("/api/deals", body, { params: { company_id: companyId } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["deals-calc"] }); setAdding(false); },
   });
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkEdit, setBulkEdit] = useState(false);
+  const invDeals = () => { qc.invalidateQueries({ queryKey: ["deals-calc"] }); setSelected(new Set()); };
+  const bulkDelete = useMutation({
+    mutationFn: (ids: number[]) => api.post("/api/deals/bulk-delete", { ids }, { params: { company_id: companyId } }),
+    onSuccess: invDeals,
+  });
+  const bulkUpdate = useMutation({
+    mutationFn: (set: any) => api.post("/api/deals/bulk-update", { ids: Array.from(selected), set }, { params: { company_id: companyId } }),
+    onSuccess: () => { invDeals(); setBulkEdit(false); },
+  });
+  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const partyName = (id?: number | null) => parties.data?.find((s) => s.id === id)?.name ?? "—";
   const statusObj = (id?: number | null) => statuses.data?.find((s) => s.id === id);
@@ -131,10 +143,20 @@ export function Deals() {
           ))}
         </div>
 
+        {selected.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-brand bg-brand-light px-4 py-2 text-sm">
+            <span className="font-medium">Выбрано сделок: {selected.size}</span>
+            <button className="btn-ghost !py-1" onClick={() => setBulkEdit(true)}>Изменить</button>
+            <button className="text-red-600 hover:underline" disabled={bulkDelete.isPending} onClick={() => { if (confirm(`Удалить выбранные сделки (${selected.size})? Закрытые пропускаются.`)) bulkDelete.mutate(Array.from(selected)); }}>Удалить</button>
+            <button className="ml-auto text-slate-500 hover:underline" onClick={() => setSelected(new Set())}>Снять выделение</button>
+          </div>
+        )}
+
         <div className="card overflow-x-auto p-0">
           <table className="table whitespace-nowrap">
             <thead>
               <tr>
+                <th className="w-8"><input type="checkbox" checked={rows.length > 0 && rows.every((r) => selected.has(r.id))} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>
                 <th>Дата</th><th>Название</th><th>{isSale ? "Клиент" : "Поставщик"}</th><th>Статус</th>
                 <th className="text-right">Сумма сделки</th>
                 <th className="text-right">{isSale ? "Поступило" : "Выплачено"}</th>
@@ -144,7 +166,8 @@ export function Deals() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50">
+                <tr key={r.id} className={`hover:bg-slate-50 ${selected.has(r.id) ? "bg-brand-light" : ""}`}>
+                  <td><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
                   <td className="text-slate-500">{r.start_date ?? "—"}</td>
                   <td className="font-medium"><Link to={`/deals/${r.id}`} className="text-brand hover:underline">{r.name}</Link></td>
                   <td>{partyName(r.counterparty_id)}</td>
@@ -155,12 +178,12 @@ export function Deals() {
                   <td className={`text-right font-medium ${Number(r.profit) < 0 ? "text-red-600" : ""}`}>{r.profit == null ? "—" : money(r.profit)}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-slate-400">{list.isLoading ? "Загрузка…" : "Нет сделок по фильтрам"}</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-slate-400">{list.isLoading ? "Загрузка…" : "Нет сделок по фильтрам"}</td></tr>}
             </tbody>
             {rows.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 bg-slate-50 font-medium">
-                  <td colSpan={8} className="px-3 py-2 text-sm">
+                  <td colSpan={9} className="px-3 py-2 text-sm">
                     {rows.length} {isSale ? "продаж" : "закупок"} на сумму: <b>{money(totalSum)}</b>
                     {isSale && <> · Общая прибыль: <b className={totalProfit < 0 ? "text-red-600" : "text-emerald-700"}>{money(totalProfit)}</b></>}
                   </td>
@@ -174,7 +197,56 @@ export function Deals() {
       {adding && (
         <AddDeal kind={kind} onClose={() => setAdding(false)} onSave={(b) => create.mutate(b)} parties={parties.data ?? []} />
       )}
+      {bulkEdit && (
+        <DealsBulkEdit count={selected.size} statuses={statuses.data ?? []} parties={parties.data ?? []} isSale={isSale}
+          onClose={() => setBulkEdit(false)} onSave={(set: any) => bulkUpdate.mutate(set)} />
+      )}
     </div>
+  );
+}
+
+function DealsBulkEdit({ count, statuses, parties, isSale, onClose, onSave }: any) {
+  const [on, setOn] = useState<Record<string, boolean>>({});
+  const [v, setV] = useState<Record<string, any>>({});
+  const submit = (e: any) => {
+    e.preventDefault();
+    const set: any = {};
+    if (on.status_id) set.status_id = v.status_id ? Number(v.status_id) : null;
+    if (on.counterparty_id) set.counterparty_id = v.counterparty_id ? Number(v.counterparty_id) : null;
+    if (on.closed) set.closed = !!v.closed;
+    onSave(set);
+  };
+  const RowF = ({ k, label, children }: any) => (
+    <div className="flex items-center gap-2">
+      <input type="checkbox" checked={!!on[k]} onChange={(e) => setOn({ ...on, [k]: e.target.checked })} />
+      <span className="w-36 text-sm">{label}</span>{children}
+    </div>
+  );
+  return (
+    <Modal title={`Массовое изменение сделок (${count})`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <p className="text-sm text-slate-500">Отметьте поля, которые изменить у выбранных сделок.</p>
+        <RowF k="status_id" label="Статус">
+          <select className="input" disabled={!on.status_id} value={v.status_id ?? ""} onChange={(e) => setV({ ...v, status_id: e.target.value })}>
+            <option value="">— без статуса —</option>
+            {statuses.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </RowF>
+        <RowF k="counterparty_id" label={isSale ? "Клиент" : "Поставщик"}>
+          <select className="input" disabled={!on.counterparty_id} value={v.counterparty_id ?? ""} onChange={(e) => setV({ ...v, counterparty_id: e.target.value })}>
+            <option value="">— не выбран —</option>
+            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </RowF>
+        <RowF k="closed" label="Статус закрытия">
+          <label className="flex items-center gap-1 text-sm"><input type="checkbox" disabled={!on.closed} checked={!!v.closed} onChange={(e) => setV({ ...v, closed: e.target.checked })} /> Закрыта</label>
+        </RowF>
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn-primary">Применить</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

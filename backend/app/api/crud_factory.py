@@ -76,4 +76,43 @@ def make_crud_router(
         await db.delete(obj)
         await db.commit()
 
+    class _BulkDelete(BaseModel):
+        ids: list[int]
+
+    class _BulkUpdate(BaseModel):
+        ids: list[int]
+        set: dict = {}
+
+    _cols = {c.name for c in model.__table__.columns} - {"id", "company_id"}
+
+    @router.post("/bulk-delete")
+    async def bulk_delete(payload: _BulkDelete, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+        rows = (await db.execute(select(model).where(
+            model.company_id == company_id, model.id.in_(payload.ids or [])))).scalars().all()
+        n = 0
+        for o in rows:
+            if getattr(o, "is_system", False):
+                continue
+            await db.delete(o)
+            n += 1
+        await db.commit()
+        return {"deleted": n}
+
+    @router.post("/bulk-update")
+    async def bulk_update(payload: _BulkUpdate, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+        changes = {k: v for k, v in (payload.set or {}).items() if k in _cols}
+        if not payload.ids or not changes:
+            return {"updated": 0}
+        rows = (await db.execute(select(model).where(
+            model.company_id == company_id, model.id.in_(payload.ids)))).scalars().all()
+        n = 0
+        for o in rows:
+            if getattr(o, "is_system", False):
+                continue
+            for k, v in changes.items():
+                setattr(o, k, v)
+            n += 1
+        await db.commit()
+        return {"updated": n}
+
     return router

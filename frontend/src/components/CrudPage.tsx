@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useCrud } from "../api/hooks";
@@ -25,14 +25,29 @@ export function CrudPage({
   title, path, queryKey, fields, columns,
 }: { title: string; path: string; queryKey: string; fields: Field[]; columns: Column[] }) {
   const { companyId } = useApp();
+  const qc = useQueryClient();
   const { create, update, remove } = useCrud(path, queryKey);
   const [editing, setEditing] = useState<any | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkEdit, setBulkEdit] = useState(false);
 
   const list = useQuery({
     queryKey: [queryKey, companyId],
     enabled: !!companyId,
     queryFn: async () => (await api.get(path, { params: { company_id: companyId } })).data as any[],
   });
+  const invalidate = () => qc.invalidateQueries({ queryKey: [queryKey] });
+  const bulkDelete = useMutation({
+    mutationFn: (ids: number[]) => api.post(`${path}/bulk-delete`, { ids }, { params: { company_id: companyId } }),
+    onSuccess: () => { invalidate(); setSelected(new Set()); },
+  });
+  const bulkUpdate = useMutation({
+    mutationFn: (set: any) => api.post(`${path}/bulk-update`, { ids: Array.from(selected), set }, { params: { company_id: companyId } }),
+    onSuccess: () => { invalidate(); setSelected(new Set()); setBulkEdit(false); },
+  });
+  const rows = list.data ?? [];
+  const allSel = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   function blank() {
     const obj: any = {};
@@ -59,17 +74,28 @@ export function CrudPage({
         <button className="btn-primary" onClick={() => setEditing(blank())}>+ Добавить</button>
       </div>
 
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-brand bg-brand-light px-4 py-2 text-sm">
+          <span className="font-medium">Выбрано: {selected.size}</span>
+          <button className="btn-ghost !py-1" onClick={() => setBulkEdit(true)}>Изменить</button>
+          <button className="text-red-600 hover:underline" onClick={() => { if (confirm(`Удалить выбранные (${selected.size})?`)) bulkDelete.mutate(Array.from(selected)); }}>Удалить</button>
+          <button className="ml-auto text-slate-500 hover:underline" onClick={() => setSelected(new Set())}>Снять выделение</button>
+        </div>
+      )}
+
       <div className="card overflow-x-auto">
         <table className="table">
           <thead>
             <tr>
+              <th className="w-8"><input type="checkbox" checked={allSel} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>
               {columns.map((c) => <th key={c.name} className={c.align === "right" ? "text-right" : ""}>{c.label}</th>)}
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {list.data?.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50">
+            {rows.map((row) => (
+              <tr key={row.id} className={`hover:bg-slate-50 ${selected.has(row.id) ? "bg-brand-light" : ""}`}>
+                <td><input type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} /></td>
                 {columns.map((c) => (
                   <td key={c.name} className={c.align === "right" ? "text-right" : ""}>
                     {c.render ? c.render(row) : row[c.name]}
@@ -81,7 +107,7 @@ export function CrudPage({
                 </td>
               </tr>
             ))}
-            {list.data?.length === 0 && <tr><td colSpan={columns.length + 1} className="py-6 text-center text-slate-400">Пусто</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={columns.length + 2} className="py-6 text-center text-slate-400">Пусто</td></tr>}
           </tbody>
         </table>
       </div>
@@ -89,7 +115,56 @@ export function CrudPage({
       {editing && (
         <CrudForm title={title} fields={fields} initial={editing} onClose={() => setEditing(null)} onSave={save} />
       )}
+      {bulkEdit && (
+        <BulkEditForm title={title} fields={fields} count={selected.size} onClose={() => setBulkEdit(false)} onSave={(set: any) => bulkUpdate.mutate(set)} />
+      )}
     </div>
+  );
+}
+
+function BulkEditForm({ title, fields, count, onClose, onSave }: any) {
+  const editable = (fields as Field[]).filter((f) => !f.required || f.type === "select" || f.type === "checkbox");
+  const [on, setOn] = useState<Record<string, boolean>>({});
+  const [val, setVal] = useState<Record<string, any>>({});
+  const submit = (e: any) => {
+    e.preventDefault();
+    const set: any = {};
+    for (const f of editable) {
+      if (!on[f.name]) continue;
+      let v = val[f.name];
+      if (f.type === "number") v = String(v || "0");
+      if (f.type === "checkbox") v = !!v;
+      if (f.type === "select" && (v === "" || v === undefined)) v = null;
+      set[f.name] = v ?? null;
+    }
+    onSave(set);
+  };
+  return (
+    <Modal title={`Массовое изменение (${count}): ${title}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <p className="text-sm text-slate-500">Отметьте поля, которые изменить у всех выбранных записей.</p>
+        {editable.map((f) => (
+          <div key={f.name} className="flex items-center gap-2">
+            <input type="checkbox" checked={!!on[f.name]} onChange={(e) => setOn({ ...on, [f.name]: e.target.checked })} />
+            <span className="w-40 text-sm">{f.label}</span>
+            {f.type === "select" ? (
+              <select className="input" disabled={!on[f.name]} value={val[f.name] ?? ""} onChange={(e) => setVal({ ...val, [f.name]: e.target.value })}>
+                <option value="">—</option>
+                {f.options?.map((o) => <option key={String(o.value)} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : f.type === "checkbox" ? (
+              <input type="checkbox" disabled={!on[f.name]} checked={!!val[f.name]} onChange={(e) => setVal({ ...val, [f.name]: e.target.checked })} />
+            ) : (
+              <input className="input" type={f.type === "number" ? "number" : "text"} disabled={!on[f.name]} value={val[f.name] ?? ""} onChange={(e) => setVal({ ...val, [f.name]: e.target.value })} />
+            )}
+          </div>
+        ))}
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn-primary">Применить</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

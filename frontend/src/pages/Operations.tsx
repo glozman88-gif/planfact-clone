@@ -89,6 +89,10 @@ export function Operations() {
     mutationFn: async (ids: number[]) => api.post("/api/operations/bulk-delete", { ids }, { params: { company_id: companyId } }),
     onSuccess: () => { invalidateAll(); setSelected(new Set()); },
   });
+  const deleteAll = useMutation({
+    mutationFn: async () => api.post("/api/operations/delete-all", {}, { params: { company_id: companyId } }),
+    onSuccess: () => { invalidateAll(); setSelected(new Set()); },
+  });
   const bulkUpdate = useMutation({
     mutationFn: async (set: any) => api.post("/api/operations/bulk-update", { ids: Array.from(selected), set }, { params: { company_id: companyId } }),
     onSuccess: () => { invalidateAll(); setSelected(new Set()); setBulkEditing(false); },
@@ -219,6 +223,10 @@ export function Operations() {
             }}
             filename="operations.xlsx"
           />
+          <button className="btn-ghost text-red-600" disabled={deleteAll.isPending || total === 0}
+            onClick={() => { if (confirm(`Удалить ВСЕ операции (${total})? Действие необратимо.`)) deleteAll.mutate(); }}>
+            {deleteAll.isPending ? "Удаление…" : "Удалить все"}
+          </button>
           <button className="btn-primary" onClick={() => setEditing({ type: "income", status: "committed", op_date: today() })}>+ Добавить операцию</button>
         </div>
 

@@ -362,6 +362,46 @@ async def delete_deal(deal_id: int, db: DbDep, _: CurrentUser):
     await db.commit()
 
 
+class DealsBulkDelete(BaseModel):
+    ids: list[int]
+
+
+class DealsBulkUpdate(BaseModel):
+    ids: list[int]
+    set: dict = {}
+
+
+_DEAL_BULK_FIELDS = {"status_id", "counterparty_id", "project_id", "kind", "closed", "note", "accounting_method", "vat_mode"}
+
+
+@router.post("/api/deals/bulk-delete", tags=["deals"])
+async def deals_bulk_delete(payload: DealsBulkDelete, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+    rows = (await db.execute(select(Deal).where(
+        Deal.company_id == company_id, Deal.id.in_(payload.ids or [])))).scalars().all()
+    n = 0
+    for d in rows:
+        if d.closed:
+            continue
+        await db.delete(d)
+        n += 1
+    await db.commit()
+    return {"deleted": n}
+
+
+@router.post("/api/deals/bulk-update", tags=["deals"])
+async def deals_bulk_update(payload: DealsBulkUpdate, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+    changes = {k: v for k, v in (payload.set or {}).items() if k in _DEAL_BULK_FIELDS}
+    if not payload.ids or not changes:
+        return {"updated": 0}
+    rows = (await db.execute(select(Deal).where(
+        Deal.company_id == company_id, Deal.id.in_(payload.ids)))).scalars().all()
+    for d in rows:
+        for k, v in changes.items():
+            setattr(d, k, v)
+    await db.commit()
+    return {"updated": len(rows)}
+
+
 # ---------- Счета на оплату ----------
 @router.get("/api/invoices", response_model=list[InvoiceOut])
 async def list_invoices(db: DbDep, _: CurrentUser, company_id: int = Query(...), deal_id: int | None = None):

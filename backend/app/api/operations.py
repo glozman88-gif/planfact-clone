@@ -250,6 +250,18 @@ class BulkUpdateIn(BaseModel):
 _BULK_FIELDS = {"account_id", "category_id", "project_id", "counterparty_id", "deal_id", "status", "description"}
 
 
+@router.post("/delete-all")
+async def delete_all(db: DbDep, _: CurrentUser, company_id: int = Query(...), account_id: int | None = None):
+    """Удалить ВСЕ операции компании (или все по конкретному счёту)."""
+    from sqlalchemy import delete as sql_delete, or_
+    conds = [Operation.company_id == company_id]
+    if account_id:
+        conds.append(or_(Operation.account_id == account_id, Operation.to_account_id == account_id))
+    res = await db.execute(sql_delete(Operation).where(*conds))
+    await db.commit()
+    return {"deleted": res.rowcount}
+
+
 @router.post("/bulk-delete")
 async def bulk_delete(payload: BulkDeleteIn, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
     """Массовое удаление операций по списку id (в рамках компании).
