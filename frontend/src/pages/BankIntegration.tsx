@@ -199,9 +199,38 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
   const [period, setPeriod] = useState("year");
   const [freq, setFreq] = useState("daily");
   const [detect, setDetect] = useState<DetectResult | null>(null);
+  const [stepAccounts, setStepAccounts] = useState<DetectResult["accounts"]>([]);   // счета для шага 3 (файл или API)
   const [decisions, setDecisions] = useState<Record<string, { selected: boolean; mode: "existing" | "new"; app_account_id?: number; create_name?: string }>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const isTbank = bank.slug === "tbank";
+  const [token, setToken] = useState("");
+  const tbankInfo = useQuery({ queryKey: ["tbank-info"], enabled: isTbank, queryFn: async () => (await api.get("/api/tbank/info")).data as any });
+
+  const periodFrom = () => {
+    const now = new Date();
+    if (period === "all") return "2023-06-01";
+    if (period === "month") return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    if (period === "quarter") { const d = new Date(now.getTime() - 92 * 864e5); return d.toISOString().slice(0, 10); }
+    return `${now.getFullYear()}-01-01`;
+  };
+  const initDecisions = (accs: DetectResult["accounts"]) => {
+    const init: any = {};
+    for (const a of accs) init[a.bank_account] = a.matched_app_account_id
+      ? { selected: true, mode: "existing", app_account_id: a.matched_app_account_id }
+      : { selected: true, mode: "new", create_name: a.suggest_name || a.bank_account };
+    setDecisions(init);
+  };
+  // T-Bank: по токену выгрузить счета → шаг 3
+  const connectTbank = async () => {
+    setBusy(true); setErr("");
+    try {
+      const res = (await api.post("/api/tbank/accounts", { token: token.trim() }, { params: { company_id: companyId } })).data;
+      setStepAccounts(res.accounts); initDecisions(res.accounts); setStep(3);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Не удалось выгрузить счета по токену");
+    } finally { setBusy(false); }
+  };
   const [createdConn, setCreatedConn] = useState<any | null>(conn ?? null);   // подключение после авторизации
   const [authScreen, setAuthScreen] = useState(false);                        // демо-экран авторизации банка
   const [connected, setConnected] = useState<{ decisions: AccDecision[]; connId: number } | null>(null);
@@ -241,14 +270,7 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
       fd.append("file", file);
       fd.append("bank", bank.slug);
       const d = (await api.post<DetectResult>("/api/imports/bank-detect", fd, { params: { company_id: companyId } })).data;
-      setDetect(d);
-      const init: any = {};
-      for (const a of d.accounts) {
-        init[a.bank_account] = a.matched_app_account_id
-          ? { selected: true, mode: "existing", app_account_id: a.matched_app_account_id }
-          : { selected: true, mode: "new", create_name: a.suggest_name || a.bank_account };
-      }
-      setDecisions(init);
+      setDetect(d); setStepAccounts(d.accounts); initDecisions(d.accounts);
     } finally { setBusy(false); }
   };
 
@@ -259,17 +281,20 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
   const finish = async () => {
     setBusy(true);
     try {
-      // 1) подключение уже создано на этапе авторизации — обновляем его (иначе создаём)
-      const connBody = { bank: bank.slug, title: title || null, sync_freq: freq };
+      // 1) подключение: для T-Bank сохраняем токен; иначе уже создано на авторизации
+      const connBody: any = { bank: bank.slug, title: title || null, sync_freq: freq };
+      if (isTbank && token.trim()) connBody.token = token.trim();
       const active = createdConn ?? conn;
       const c = active
         ? (await api.put(`/api/bank-connections/${active.id}`, connBody)).data
         : (await api.post("/api/bank-connections", connBody, { params: { company_id: companyId } })).data;
       // 2) счета: создать недостающие + сопоставления. Итоговые решения — уже existing.
       const finalDec: AccDecision[] = [];
+      const selectedNums: string[] = [];
       let firstAcc: number | null = null;
       for (const [bank_account, v] of Object.entries(decisions)) {
         if (!v.selected) continue;
+        selectedNums.push(bank_account);
         let accId = v.app_account_id ?? null;
         if (v.mode === "new") {
           accId = (await api.post("/api/accounts", { name: v.create_name || bank_account, kind: "bank", legal_entity_id: legalEntityId }, { params: { company_id: companyId } })).data.id;
@@ -281,6 +306,13 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
         }
       }
       if (firstAcc) await api.put(`/api/bank-connections/${c.id}`, { ...connBody, account_id: firstAcc });
+      // 3) T-Bank: сразу выгружаем операции по API в предпросмотр
+      if (isTbank) {
+        const ops = (await api.post("/api/tbank/operations", {
+          token: token.trim(), accounts: selectedNums, date_from: periodFrom(), date_till: new Date().toISOString().slice(0, 10),
+        }, { params: { company_id: companyId } })).data;
+        setDetect(ops);
+      }
       onDone();
       setConnected({ decisions: finalDec, connId: c.id });
     } finally { setBusy(false); }
@@ -356,7 +388,7 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
         {step === 1 && (
           <div className="space-y-4">
             <p className="font-medium">Введите ИНН юрлица, счета которого нужно подключить.</p>
-            <p className="text-sm text-slate-500">На следующем шаге вы будете перенаправлены на авторизацию в {bank.name}.</p>
+            <p className="text-sm text-slate-500">{isTbank ? `На следующем шаге вставьте API-токен Т-Бизнес — приложение само выгрузит счета и операции.` : `На следующем шаге вы будете перенаправлены на авторизацию в ${bank.name}.`}</p>
             <div className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-700">Приложение не хранит ваши данные для входа в банк, подключение безопасно. Вы всегда сможете отключить банк.</div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
@@ -375,7 +407,12 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
           </div>
         )}
 
-        {step === 2 && !authScreen && (
+        {step === 2 && isTbank && (
+          <TbankTokenStep serverIp={tbankInfo.data?.server_ip} sandboxToken={tbankInfo.data?.sandbox_token}
+            token={token} setToken={setToken} busy={busy} err={err}
+            onBack={() => setStep(1)} onConnect={connectTbank} />
+        )}
+        {step === 2 && !isTbank && !authScreen && (
           <div className="space-y-4">
             <p className="font-medium">Авторизация в банке</p>
             <p className="text-sm text-slate-500">
@@ -393,35 +430,42 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
             </div>
           </div>
         )}
-        {step === 2 && authScreen && (
+        {step === 2 && !isTbank && authScreen && (
           <BankAuthScreen bank={bank} busy={busy} onCancel={() => setAuthScreen(false)} onConfirm={afterAuth} />
         )}
 
         {step === 3 && (
           <div className="space-y-4">
             <p className="font-medium">Выберите счета для синхронизации.</p>
-            <p className="text-sm text-slate-500">Приложение добавит платежи по этим счетам за период, который вы укажете в поле «Начало синхронизации». Загрузите выписку банка (CSV/XLSX/1С), чтобы распознать счета и операции.</p>
+            <p className="text-sm text-slate-500">{isTbank
+              ? "Приложение выгрузило счета из Т-Банка. Сопоставьте их со счетами приложения (найденные подставлены автоматически), укажите период — операции подтянутся сами."
+              : "Приложение добавит платежи по этим счетам за период, который вы укажете. Загрузите выписку банка (CSV/XLSX/1С), чтобы распознать счета и операции."}</p>
 
-            {!detect ? (
+            {stepAccounts.length === 0 ? (
+              isTbank ? (
+                <div className="py-8 text-center text-sm text-slate-400">Загружаем счета из банка…</div>
+              ) : (
               <label className="flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed border-slate-200 py-8 text-sm text-slate-500 hover:border-brand">
                 <span className="text-2xl">📄</span>
                 {busy ? "Распознаём…" : "Нажмите, чтобы выбрать файл выписки"}
                 <input type="file" className="hidden" accept=".csv,.xlsx,.xlsm,.txt" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
               </label>
+              )
             ) : (
               <>
-                <div className="text-xs text-slate-400">Распознано операций: {detect.totals.count}. Счетов в выписке: {detect.accounts.length}.</div>
+                {detect && <div className="text-xs text-slate-400">Распознано операций: {detect.totals.count}. Счетов: {stepAccounts.length}.</div>}
                 <div className="grid grid-cols-[auto_1fr_1fr] items-center gap-x-3 gap-y-2">
                   <div className="text-xs font-semibold uppercase text-slate-400">Счёт в банке</div>
                   <div className="col-span-2 text-xs font-semibold uppercase text-slate-400">Счёт в приложении</div>
-                  {detect.accounts.map((a) => {
+                  {stepAccounts.map((a) => {
                     const d = decisions[a.bank_account] || { selected: true, mode: "new", create_name: a.suggest_name };
                     const set = (patch: any) => setDecisions((s) => ({ ...s, [a.bank_account]: { ...d, ...patch } }));
                     const sel = d.mode === "existing" ? String(d.app_account_id ?? "") : "__new__";
                     return (
                       <div key={a.bank_account} className="contents">
-                        <label className="flex items-center gap-2 py-1"><input type="checkbox" checked={d.selected} onChange={(e) => set({ selected: e.target.checked })} />
-                          <span className="font-mono text-xs">{a.bank_account}</span></label>
+                        <label className="flex items-start gap-2 py-1"><input type="checkbox" className="mt-1" checked={d.selected} onChange={(e) => set({ selected: e.target.checked })} />
+                          <span><span className="font-mono text-xs">{a.bank_account}</span>
+                            {a.balance != null && <span className="block text-xs text-slate-400">Остаток: {money(a.balance)} {a.currency || ""}</span>}</span></label>
                         <select className="input !py-1.5" value={sel}
                           onChange={(e) => e.target.value === "__new__" ? set({ mode: "new", create_name: d.create_name || a.suggest_name }) : set({ mode: "existing", app_account_id: Number(e.target.value) })}>
                           <option value="__new__">＋ Создать новый счёт</option>
@@ -455,6 +499,15 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
 function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
   const [detect, setDetect] = useState<DetectResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const isTbank = bank.slug === "tbank";
+  // T-Bank: тянем операции по API (по сохранённому токену и счетам подключения)
+  useEffect(() => {
+    if (!isTbank) return;
+    setBusy(true);
+    api.post("/api/tbank/operations", { connection_id: conn.id, date_from: `${new Date().getFullYear()}-01-01`, date_till: new Date().toISOString().slice(0, 10) }, { params: { company_id: companyId } })
+      .then((r) => setDetect(r.data)).catch((e) => setErr(e?.response?.data?.detail || "Не удалось выгрузить операции")).finally(() => setBusy(false));
+  }, []);
   const onFile = async (file: File) => {
     setBusy(true);
     try {
@@ -470,10 +523,16 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
       <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
         <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-semibold">Получить новые операции — {bank.name}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button></div>
+        {isTbank ? (
+          <div className="py-8 text-center text-sm text-slate-500">
+            {err ? <span className="text-red-600">{err}</span> : "Выгружаем свежие операции из Т-Банка…"}
+          </div>
+        ) : (
         <label className="flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed border-slate-200 py-8 text-sm text-slate-500 hover:border-brand">
           <span className="text-2xl">📄</span>{busy ? "Распознаём…" : "Загрузите свежую выписку банка"}
           <input type="file" className="hidden" accept=".csv,.xlsx,.xlsm,.txt" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
         </label>
+        )}
       </div>
     </Overlay>
   );
@@ -554,6 +613,41 @@ function SettingsModal({ conn, bank, companyId, onClose, onDone, onLoad }: any) 
         </div>
       </div>
     </Overlay>
+  );
+}
+
+// Шаг 2 для Т-Банка: инструкция по выпуску токена (с IP сервера) + ввод токена
+function TbankTokenStep({ serverIp, sandboxToken, token, setToken, busy, err, onBack, onConnect }: any) {
+  return (
+    <div className="space-y-4">
+      <p className="font-medium">Подключение по API-токену Т-Бизнес</p>
+      <div className="rounded-md border bg-slate-50 p-3 text-sm">
+        <div className="mb-2 font-semibold">Как выпустить токен (1 раз):</div>
+        <ol className="ml-4 list-decimal space-y-1 text-slate-600">
+          <li>Войдите в <a className="text-brand hover:underline" href="https://www.tbank.ru/business/" target="_blank" rel="noreferrer">кабинет Т-Бизнес</a> → <b>Настройки</b> → <b>Интеграции</b> → вкладка <b>T-API</b>.</li>
+          <li>Нажмите <b>«Выпустить токен»</b>.</li>
+          <li>В поле разрешённых IP укажите адрес этого сервера:
+            <span className="ml-1 inline-flex items-center gap-2">
+              <code className="rounded bg-white px-2 py-0.5 font-mono text-brand ring-1 ring-slate-200">{serverIp || "определяется…"}</code>
+              {serverIp && <button type="button" className="text-xs text-brand hover:underline" onClick={() => navigator.clipboard?.writeText(serverIp)}>копировать</button>}
+            </span>
+          </li>
+          <li>Выберите доступы: <b>Счета</b> (bank-accounts) и <b>Выписки/операции</b> (bank-statement).</li>
+          <li>Скопируйте выпущенный токен и вставьте его ниже.</li>
+        </ol>
+        <a className="mt-2 inline-block text-xs text-brand hover:underline" href="https://developer.tbank.ru/docs/intro/manuals/self-service-auth" target="_blank" rel="noreferrer">Подробная инструкция в документации Т-Банка →</a>
+      </div>
+      <div>
+        <label className="label">API-токен Т-Бизнес</label>
+        <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder="t.XXXXXXXX… или демо-токен" />
+        {sandboxToken && <button type="button" className="mt-1 text-xs text-slate-400 hover:text-brand" onClick={() => setToken(sandboxToken)}>Подставить демо-токен (песочница) для проверки</button>}
+      </div>
+      {err && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>}
+      <div className="flex justify-between">
+        <button className="btn-ghost" onClick={onBack}>Назад</button>
+        <button className="btn-primary" disabled={busy || token.trim().length < 4} onClick={onConnect}>{busy ? "Выгружаем счета…" : "Подключить"}</button>
+      </div>
+    </div>
   );
 }
 

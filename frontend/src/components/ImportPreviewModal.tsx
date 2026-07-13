@@ -22,7 +22,7 @@ export interface DetectResult {
   bank_name: string;
   filename?: string;
   period: { from: string | null; to: string | null };
-  accounts: { bank_account: string; matched_app_account_id?: number | null; matched_name?: string | null; will_create?: boolean; suggest_name?: string }[];
+  accounts: { bank_account: string; matched_app_account_id?: number | null; matched_name?: string | null; will_create?: boolean; suggest_name?: string; balance?: number | null; currency?: string; name?: string }[];
   counterparties: { total: number; new: string[]; existing: number };
   rows: DetectRow[];
   totals: { count: number; sum: string };
