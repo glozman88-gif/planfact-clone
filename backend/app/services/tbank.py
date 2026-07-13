@@ -51,6 +51,31 @@ async def get_accounts(token: str) -> list[dict]:
     return [a for a in out if a["account_number"]]
 
 
+async def get_company(token: str) -> dict | None:
+    """Реквизиты организации по токену (для авто-создания юрлица)."""
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{base_for(token)}/api/v1/company", headers=_headers(token))
+            if r.status_code != 200:
+                return None
+            d = r.json()
+    except Exception:
+        return None
+    req = d.get("requisites") or {}
+    bank = d.get("bank") or {}
+    return {
+        "name": d.get("name"),
+        "full_name": req.get("fullName"),
+        "inn": req.get("inn"),
+        "kpp": req.get("kpp"),
+        "ogrn": req.get("ogrn"),
+        "address": req.get("legalAddress") or req.get("address"),
+        "bank_name": bank.get("bankName"),
+        "bik": bank.get("bankBic"),
+        "corr_account": bank.get("corrAccount"),
+    }
+
+
 async def get_statement(token: str, account_number: str, date_from: str, date_till: str) -> dict:
     """Выписка по счёту за период (bank-statement): сальдо + список операций с реквизитами."""
     async with httpx.AsyncClient(timeout=60) as c:

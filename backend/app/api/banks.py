@@ -16,7 +16,7 @@ from app.api.deps import CurrentUser, DbDep
 from app.api.imports_bank import _digits
 from app.api.rules import load_rules
 from app.api.tbank import _public_ip
-from app.models import Account, BankAccountMap, BankConnection, Counterparty, Operation
+from app.models import Account, BankAccountMap, BankConnection, Counterparty, LegalEntity, Operation
 from app.models.enums import OperationStatus, OperationType
 from app.services import tbank, tochka
 from app.services.currency import to_base_amount
@@ -103,10 +103,49 @@ class TokenIn(BaseModel):
     token: str
 
 
+def _clip(v, n):
+    return v[:n] if isinstance(v, str) else v
+
+
+async def _ensure_legal_entity(db, company_id: int, company: dict, first_account: str | None) -> int | None:
+    """Найти юрлицо по ИНН или создать с реквизитами из банка."""
+    inn = (company.get("inn") or "").strip()[:20]
+    # обрезаем банковские реквизиты по длине колонок (на случай нестандартных значений)
+    company = {**company, "inn": inn, "kpp": _clip(company.get("kpp"), 20), "ogrn": _clip(company.get("ogrn"), 20),
+               "bik": _clip(company.get("bik"), 12), "corr_account": _clip(company.get("corr_account"), 34),
+               "bank_name": _clip(company.get("bank_name"), 255)}
+    first_account = _clip(first_account, 34)
+    if not inn:
+        return None
+    le = (await db.execute(select(LegalEntity).where(
+        LegalEntity.company_id == company_id, LegalEntity.inn == inn))).scalar_one_or_none()
+    if le is None:
+        le = LegalEntity(company_id=company_id, name=company.get("name") or f"Юрлицо {inn}",
+                         full_name=company.get("full_name"), inn=inn, kpp=company.get("kpp"),
+                         ogrn=company.get("ogrn"), address=company.get("address"),
+                         bank_name=company.get("bank_name"), bik=company.get("bik"),
+                         corr_account=company.get("corr_account"), settlement_account=first_account)
+        db.add(le)
+    else:
+        # дозаполнить недостающие банковские реквизиты
+        le.full_name = le.full_name or company.get("full_name")
+        le.kpp = le.kpp or company.get("kpp")
+        le.ogrn = le.ogrn or company.get("ogrn")
+        le.address = le.address or company.get("address")
+        le.bank_name = le.bank_name or company.get("bank_name")
+        le.bik = le.bik or company.get("bik")
+        le.corr_account = le.corr_account or company.get("corr_account")
+        le.settlement_account = le.settlement_account or first_account
+    await db.commit()
+    await db.refresh(le)
+    return le.id
+
+
 @router.post("/{slug}/accounts")
 async def accounts(slug: str, payload: TokenIn, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+    token = payload.token.strip()
     try:
-        raw = await _client_accounts(slug, payload.token.strip())
+        raw = await _client_accounts(slug, token)
     except httpx.HTTPStatusError as e:
         raise HTTPException(400, "Токен недействителен или нет доступа" if e.response.status_code in (401, 403) else "Банк вернул ошибку")
     except HTTPException:
@@ -115,7 +154,15 @@ async def accounts(slug: str, payload: TokenIn, db: DbDep, _: CurrentUser, compa
         raise HTTPException(502, "Не удалось связаться с банком")
     if not raw:
         raise HTTPException(400, "По токену не найдено ни одного счёта")
-    return {"accounts": await _match_accounts(db, company_id, slug, raw)}
+    # авто-создание юрлица с реквизитами из банка + привязка к счетам
+    le_id = None
+    company = None
+    cl = _client(slug)
+    if hasattr(cl, "get_company"):
+        company = await cl.get_company(token)
+        if company:
+            le_id = await _ensure_legal_entity(db, company_id, company, raw[0].get("account_number") if raw else None)
+    return {"accounts": await _match_accounts(db, company_id, slug, raw), "legal_entity_id": le_id, "company": company}
 
 
 class OpsIn(BaseModel):

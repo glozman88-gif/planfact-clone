@@ -228,7 +228,9 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
     setBusy(true); setErr("");
     try {
       const res = (await api.post(`/api/banks/${bank.slug}/accounts`, { token: token.trim() }, { params: { company_id: companyId } })).data;
-      setStepAccounts(res.accounts); initDecisions(res.accounts); setStep(3);
+      setStepAccounts(res.accounts); initDecisions(res.accounts);
+      if (res.legal_entity_id) { setLegalEntityId(res.legal_entity_id); entities.refetch(); if (res.company?.name) setTitle(res.company.name); }
+      setStep(3);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || "Не удалось выгрузить счета по токену");
     } finally { setBusy(false); }
