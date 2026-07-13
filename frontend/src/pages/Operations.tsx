@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
@@ -29,6 +30,12 @@ export function Operations() {
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
   const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "" });
   const [editing, setEditing] = useState<Partial<Operation> | null>(null);
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const acc = searchParams.get("account_id");
+    if (acc) setFilters((f) => ({ ...f, account_id: acc }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkEditing, setBulkEditing] = useState(false);
 
@@ -109,6 +116,19 @@ export function Operations() {
     const s = new Set(types); s.has(t) ? s.delete(t) : s.add(t); setTypes(s);
   };
 
+  // Быстрые (сохранённые) фильтры
+  const [fname, setFname] = useState("");
+  const savedFilters = useQuery({
+    queryKey: ["quick-filters", companyId], enabled: !!companyId,
+    queryFn: async () => (await api.get("/api/quick-filters", { params: { company_id: companyId, scope: "operations" } })).data as any[],
+  });
+  const saveFilter = useMutation({
+    mutationFn: () => api.post("/api/quick-filters", { name: fname, scope: "operations", params: { filters, types: Array.from(types) } }, { params: { company_id: companyId } }),
+    onSuccess: () => { setFname(""); qc.invalidateQueries({ queryKey: ["quick-filters"] }); },
+  });
+  const delFilter = useMutation({ mutationFn: (id: number) => api.delete(`/api/quick-filters/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ["quick-filters"] }) });
+  const applyFilter = (f: any) => { if (f.params?.filters) setFilters({ ...filters, ...f.params.filters }); if (f.params?.types) setTypes(new Set(f.params.types)); };
+
   const sm = list.data?.summary;
 
   return (
@@ -117,6 +137,22 @@ export function Operations() {
       <aside className="w-60 shrink-0 space-y-4">
         <div className="card space-y-3">
           <h3 className="font-semibold">Фильтры</h3>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-brand">Быстрые фильтры ({savedFilters.data?.length ?? 0})</summary>
+            <div className="mt-2 space-y-1">
+              {savedFilters.data?.map((f) => (
+                <div key={f.id} className="flex items-center gap-1">
+                  <button className="flex-1 truncate text-left text-slate-600 hover:text-brand hover:underline" onClick={() => applyFilter(f)}>{f.name}</button>
+                  <button className="text-red-400 hover:text-red-600" onClick={() => delFilter.mutate(f.id)}>×</button>
+                </div>
+              ))}
+              {savedFilters.data?.length === 0 && <div className="text-xs text-slate-400">Нет сохранённых</div>}
+              <div className="flex gap-1 pt-1">
+                <input className="input" placeholder="Сохранить как…" value={fname} onChange={(e) => setFname(e.target.value)} />
+                <button className="btn-ghost" disabled={!fname.trim() || saveFilter.isPending} onClick={() => saveFilter.mutate()}>＋</button>
+              </div>
+            </div>
+          </details>
           <div>
             <div className="label">Тип операции</div>
             {(Object.keys(TYPE_LABEL) as OperationType[]).map((t) => (

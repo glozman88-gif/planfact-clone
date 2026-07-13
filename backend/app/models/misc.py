@@ -90,6 +90,26 @@ class BankConnection(Base, TimestampMixin):
     bank: Mapped[str] = mapped_column(String(32))          # slug: tochka|tbank|modulbank|sber|alfa|blank|zenmoney
     method: Mapped[str] = mapped_column(String(16))        # token | oauth
     status: Mapped[str] = mapped_column(String(24), default="connected")  # connected|pending|disconnected
+    # Название подключения (например «ЮЛ-1») — для нескольких подключений к одному банку
+    title: Mapped[str | None] = mapped_column(String(255))
+    # Счёт в приложении, к которому привязываются операции этого подключения
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     token: Mapped[str | None] = mapped_column(Text)        # API-токен (для method=token) или access_token (oauth)
     client_id: Mapped[str | None] = mapped_column(String(255))
     client_secret: Mapped[str | None] = mapped_column(String(512))
+
+
+class BankAccountMap(Base, TimestampMixin):
+    """Сопоставление счёта в банке со счётом в приложении (в рамках подключения).
+
+    У банка может быть несколько счетов — каждый привязывается к своему счёту приложения,
+    и движения по нему (приход/расход/перемещения) идут на этот счёт.
+    """
+
+    __tablename__ = "bank_account_maps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("bank_connections.id", ondelete="CASCADE"), index=True)
+    bank_account: Mapped[str] = mapped_column(String(255))  # номер/название счёта в банке
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
