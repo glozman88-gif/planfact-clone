@@ -97,24 +97,13 @@ async def update_connection(conn_id: int, payload: BankConnIn, db: DbDep, _: Cur
 
 
 @router.delete("/{conn_id}", status_code=204)
-async def delete_connection(conn_id: int, db: DbDep, _: CurrentUser, reset_balances: bool = True):
-    """Отключить банк. По умолчанию сбрасывает начальные остатки/овердрафт привязанных счетов
-    (они были выставлены при сверке с банком) — чтобы после удаления операций остаток был 0."""
-    from decimal import Decimal
-    from app.models import Account, BankAccountMap
+async def delete_connection(conn_id: int, db: DbDep, _: CurrentUser):
+    """Отключить банк без потери данных: удаляется только подключение (и сопоставления счетов),
+    а операции и остатки счетов сохраняются."""
     conn = await db.get(BankConnection, conn_id)
-    if conn is None:
-        return
-    if reset_balances:
-        maps = (await db.execute(select(BankAccountMap).where(BankAccountMap.connection_id == conn_id))).scalars().all()
-        for m in maps:
-            if m.account_id:
-                acc = await db.get(Account, m.account_id)
-                if acc is not None:
-                    acc.opening_balance = Decimal("0")
-                    acc.credit_limit = Decimal("0")
-    await db.delete(conn)
-    await db.commit()
+    if conn is not None:
+        await db.delete(conn)
+        await db.commit()
 
 
 # ---------- Сопоставление счетов банка со счетами приложения ----------
