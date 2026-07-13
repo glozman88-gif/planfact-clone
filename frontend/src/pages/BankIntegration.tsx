@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
@@ -44,14 +45,25 @@ export function BankIntegration() {
   const { companyId } = useApp();
   const qc = useQueryClient();
   const [tab, setTab] = useState<"direct" | "email">("direct");
-  const [wizard, setWizard] = useState<{ bank: Bank; conn?: any } | null>(null);
+  const [wizard, setWizard] = useState<{ bank: Bank; conn?: any; startStep?: number } | null>(null);
   const [syncFor, setSyncFor] = useState<any | null>(null);
   const [settingsFor, setSettingsFor] = useState<any | null>(null);
+  const [params, setParams] = useSearchParams();
 
   const conns = useQuery({
     queryKey: ["bank-connections", companyId], enabled: !!companyId,
     queryFn: async () => (await api.get<any[]>("/api/bank-connections", { params: { company_id: companyId } })).data,
   });
+
+  // Возврат из авторизации банка (?resume=connId) — продолжить мастер с шага «Настройка счетов»
+  useEffect(() => {
+    const rid = params.get("resume");
+    if (rid && conns.data && !wizard) {
+      const c = conns.data.find((x) => String(x.id) === rid);
+      if (c) setWizard({ bank: bankBy(c.bank), conn: c, startStep: 3 });
+      setParams({}, { replace: true });
+    }
+  }, [conns.data]);
   const del = useMutation({
     mutationFn: (id: number) => api.delete(`/api/bank-connections/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["bank-connections"] }),
@@ -116,7 +128,7 @@ export function BankIntegration() {
       )}
 
       {wizard && (
-        <ConnectWizard bank={wizard.bank} conn={wizard.conn} companyId={companyId!}
+        <ConnectWizard bank={wizard.bank} conn={wizard.conn} startStep={wizard.startStep} companyId={companyId!}
           onClose={() => setWizard(null)} onDone={() => { refresh(); }} />
       )}
       {syncFor && (
@@ -176,25 +188,45 @@ function ConnRow({ bank, conn, first, onSync, onSettings, onDelete }: any) {
 }
 
 // ---------- Мастер подключения (3 шага) ----------
-function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank; conn?: any; companyId: number; onClose: () => void; onDone: () => void }) {
+function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { bank: Bank; conn?: any; startStep?: number; companyId: number; onClose: () => void; onDone: () => void }) {
   const entities = useLegalEntities();
   const accounts = useAccounts();
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(startStep ?? 1);
   const [title, setTitle] = useState(conn?.title ?? "");
   const [legalEntityId, setLegalEntityId] = useState<number | null>(conn?.legal_entity_id ?? null);
   const [inn, setInn] = useState("");
   const [kpp, setKpp] = useState("");
-  const [token, setToken] = useState("");
-  const [clientId, setClientId] = useState(conn?.client_id ?? "");
-  const [clientSecret, setClientSecret] = useState("");
   const [period, setPeriod] = useState("year");
   const [freq, setFreq] = useState("daily");
   const [detect, setDetect] = useState<DetectResult | null>(null);
   const [decisions, setDecisions] = useState<Record<string, { selected: boolean; mode: "existing" | "new"; app_account_id?: number; create_name?: string }>>({});
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [createdConn, setCreatedConn] = useState<any | null>(conn ?? null);   // подключение после авторизации
+  const [authScreen, setAuthScreen] = useState(false);                        // демо-экран авторизации банка
   const [connected, setConnected] = useState<{ decisions: AccDecision[]; connId: number } | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [autoResult, setAutoResult] = useState<any>(null);
+
+  // «Продолжить» на шаге 2 → авторизация в банке (реальный OAuth-редирект или демо-экран)
+  const startAuth = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = (await api.post("/api/bank-oauth/start", { bank: bank.slug, title: title || null }, { params: { company_id: companyId } })).data;
+      setCreatedConn({ id: r.connection_id, bank: bank.slug, title });
+      if (r.mode === "oauth" && r.url) { window.location.href = r.url; return; }
+      setAuthScreen(true);
+    } catch {
+      setErr("Не удалось начать авторизацию в банке");
+    } finally { setBusy(false); }
+  };
+  // Возврат после успешной авторизации (демо) → перейти к настройке счетов
+  const afterAuth = async () => {
+    if (createdConn) await api.post("/api/bank-oauth/demo-confirm", { connection_id: createdConn.id }).catch(() => {});
+    onDone();
+    setAuthScreen(false);
+    setStep(3);
+  };
 
   const pickEntity = (id: number | null) => {
     setLegalEntityId(id);
@@ -227,10 +259,11 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
   const finish = async () => {
     setBusy(true);
     try {
-      // 1) подключение
-      const connBody = { bank: bank.slug, title: title || null, token: token || null, client_id: clientId || null, client_secret: clientSecret || null };
-      const c = conn
-        ? (await api.put(`/api/bank-connections/${conn.id}`, connBody)).data
+      // 1) подключение уже создано на этапе авторизации — обновляем его (иначе создаём)
+      const connBody = { bank: bank.slug, title: title || null, sync_freq: freq };
+      const active = createdConn ?? conn;
+      const c = active
+        ? (await api.put(`/api/bank-connections/${active.id}`, connBody)).data
         : (await api.post("/api/bank-connections", connBody, { params: { company_id: companyId } })).data;
       // 2) счета: создать недостающие + сопоставления. Итоговые решения — уже existing.
       const finalDec: AccDecision[] = [];
@@ -323,7 +356,7 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
         {step === 1 && (
           <div className="space-y-4">
             <p className="font-medium">Введите ИНН юрлица, счета которого нужно подключить.</p>
-            <p className="text-sm text-slate-500">{bank.method === "oauth" ? `На следующем шаге вы будете перенаправлены на сайт ${bank.name}.` : `На следующем шаге вставьте API-токен из кабинета ${bank.name}.`}</p>
+            <p className="text-sm text-slate-500">На следующем шаге вы будете перенаправлены на авторизацию в {bank.name}.</p>
             <div className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-700">Приложение не хранит ваши данные для входа в банк, подключение безопасно. Вы всегда сможете отключить банк.</div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
@@ -342,26 +375,26 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
           </div>
         )}
 
-        {step === 2 && (
+        {step === 2 && !authScreen && (
           <div className="space-y-4">
             <p className="font-medium">Авторизация в банке</p>
-            <p className="text-sm text-slate-500">{bank.hint} <a className="text-brand hover:underline" href={bank.docs} target="_blank" rel="noreferrer">Документация API →</a></p>
-            {bank.method === "token" ? (
-              <div><label className="label">API-токен</label>
-                <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Вставьте токен из кабинета банка" /></div>
-            ) : (
-              <div className="space-y-3">
-                <div><label className="label">client_id</label><input className="input font-mono" value={clientId} onChange={(e) => setClientId(e.target.value)} /></div>
-                <div><label className="label">client_secret</label><input className="input font-mono" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} /></div>
-                <a className={`btn-ghost inline-block ${clientId ? "" : "pointer-events-none opacity-40"}`} target="_blank" rel="noreferrer"
-                  href={clientId ? `${bank.authorize}?response_type=code&client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(bank.scope || "")}&redirect_uri=${encodeURIComponent(location.origin + "/bank-oauth-callback")}` : "#"}>
-                  Перейти к авторизации в банке →</a>
-                <p className="text-xs text-slate-400">После авторизации вернитесь и нажмите «Следующий шаг».</p>
-              </div>
-            )}
-            <div className="flex justify-between"><button className="btn-ghost" onClick={() => setStep(1)}>Назад</button>
-              <button className="btn-primary" onClick={() => setStep(3)}>Следующий шаг</button></div>
+            <p className="text-sm text-slate-500">
+              Нажмите «Продолжить» — откроется авторизация в {bank.name}. Войдите по номеру телефона и
+              подтвердите доступ к счетам. После этого вы автоматически вернётесь сюда — <b>API-ключ вводить не нужно</b>.
+            </p>
+            <div className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-700">
+              Приложение не хранит логин и пароль от банка. Доступ выдаётся банком по защищённому протоколу
+              (OAuth 2.0) и может быть отозван в любой момент.
+            </div>
+            {err && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="flex justify-between">
+              <button className="btn-ghost" onClick={() => setStep(1)}>Назад</button>
+              <button className="btn-primary" disabled={busy} onClick={startAuth}>{busy ? "Открываем банк…" : "Продолжить"}</button>
+            </div>
           </div>
+        )}
+        {step === 2 && authScreen && (
+          <BankAuthScreen bank={bank} busy={busy} onCancel={() => setAuthScreen(false)} onConfirm={afterAuth} />
         )}
 
         {step === 3 && (
@@ -521,6 +554,44 @@ function SettingsModal({ conn, bank, companyId, onClose, onDone, onLoad }: any) 
         </div>
       </div>
     </Overlay>
+  );
+}
+
+// Экран авторизации в банке (мимикрия входа по телефону, как при OAuth-редиректе).
+// При настроенном OAuth-приложении оператора используется реальный редирект на сайт банка;
+// это — демо-экран для развёртывания без партнёрской регистрации.
+function BankAuthScreen({ bank, busy, onCancel, onConfirm }: { bank: Bank; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const [phase, setPhase] = useState<"phone" | "code">("phone");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 rounded-md border bg-slate-50 px-3 py-2 text-sm text-slate-500">
+        <span className={`flex h-6 w-6 items-center justify-center rounded text-xs font-bold text-white ${bank.color}`}>{bank.name[0]}</span>
+        <span>Защищённая авторизация · {bank.name}</span>
+        <span className="ml-auto text-xs">🔒 OAuth 2.0</span>
+      </div>
+      <div className="rounded-lg border p-5">
+        <h4 className="mb-1 text-center text-lg font-semibold">Вход в {bank.name}</h4>
+        <p className="mb-4 text-center text-sm text-slate-500">Приложение запрашивает доступ к вашим счетам и выпискам</p>
+        {phase === "phone" ? (
+          <div className="space-y-3">
+            <div><label className="label">Номер телефона</label>
+              <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 ___ ___-__-__" autoFocus /></div>
+            <button className="btn-primary w-full" disabled={phone.replace(/\D/g, "").length < 10} onClick={() => setPhase("code")}>Получить код</button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div><label className="label">Код из СМS</label>
+              <input className="input tracking-[0.4em]" value={code} onChange={(e) => setCode(e.target.value)} placeholder="____" maxLength={6} autoFocus /></div>
+            <button className="btn-primary w-full" disabled={busy || code.replace(/\D/g, "").length < 4} onClick={onConfirm}>
+              {busy ? "Подтверждаем…" : "Подтвердить и разрешить доступ"}</button>
+            <p className="text-center text-xs text-slate-400">После подтверждения вы вернётесь в приложение</p>
+          </div>
+        )}
+      </div>
+      <div className="flex justify-start"><button className="btn-ghost" onClick={onCancel}>← Отменить авторизацию</button></div>
+    </div>
   );
 }
 

@@ -24,9 +24,18 @@ class Settings(BaseSettings):
     # Валюта по умолчанию
     default_currency: str = "RUB"
 
+    # Публичный адрес приложения (для redirect_uri OAuth банков). Если пусто — берётся
+    # первый origin из cors_origins.
+    app_base_url: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def base_url(self) -> str:
+        """Базовый URL приложения (для OAuth-редиректов)."""
+        return (self.app_base_url or (self.cors_origins_list[0] if self.cors_origins_list else "")).rstrip("/")
 
 
 @lru_cache
