@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useLegalEntities } from "../api/hooks";
 import { ImportPreviewModal, SuccessModal } from "../components/ImportPreviewModal";
@@ -46,6 +46,7 @@ export function BankIntegration() {
   const [tab, setTab] = useState<"direct" | "email">("direct");
   const [wizard, setWizard] = useState<{ bank: Bank; conn?: any } | null>(null);
   const [syncFor, setSyncFor] = useState<any | null>(null);
+  const [settingsFor, setSettingsFor] = useState<any | null>(null);
 
   const conns = useQuery({
     queryKey: ["bank-connections", companyId], enabled: !!companyId,
@@ -98,7 +99,7 @@ export function BankIntegration() {
                     <div className="px-4 py-3">
                       {list.map((c, i) => (
                         <ConnRow key={c.id} bank={b} conn={c} first={i === 0}
-                          onSync={() => setSyncFor(c)} onSettings={() => setWizard({ bank: b, conn: c })}
+                          onSync={() => setSyncFor(c)} onSettings={() => setSettingsFor(c)}
                           onDelete={() => confirm("Отключить банк? Сопоставления счетов будут удалены.") && del.mutate(c.id)} />
                       ))}
                       <button className="mt-2 flex items-center gap-1 text-sm text-brand hover:underline" onClick={() => setWizard({ bank: b })}>
@@ -122,6 +123,11 @@ export function BankIntegration() {
         <SyncUpload conn={syncFor} bank={bankBy(syncFor.bank)} companyId={companyId!}
           onClose={() => setSyncFor(null)} onDone={refresh} />
       )}
+      {settingsFor && (
+        <SettingsModal conn={settingsFor} bank={bankBy(settingsFor.bank)} companyId={companyId!}
+          onClose={() => setSettingsFor(null)} onDone={refresh}
+          onLoad={() => { const c = settingsFor; setSettingsFor(null); setSyncFor(c); }} />
+      )}
     </div>
   );
 }
@@ -135,24 +141,34 @@ function BankName({ b }: { b: Bank }) {
   );
 }
 
+const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+const freqLabel = (f?: string) => f === "twice" ? "несколько раз в день" : f === "manual" ? "вручную" : "раз в день";
+const fmtSync = (iso?: string | null) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}. ${d.getFullYear()} в ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 // Строка подключённого юрлица: юрлицо, счетов N, статус, действия ⟳ ⚙ ✕
 function ConnRow({ bank, conn, first, onSync, onSettings, onDelete }: any) {
   const maps = useQuery({ queryKey: ["bank-maps", conn.id], queryFn: async () => (await api.get(`/api/bank-connections/${conn.id}/accounts`)).data as any[] });
   const n = maps.data?.length ?? 0;
+  const last = fmtSync(conn.last_sync_at);
   return (
     <div className="grid grid-cols-[2fr_2fr_2fr_auto] items-center gap-2 py-2">
-      <div>{first ? <BankName b={bank} /> : <span className="pl-11 text-sm text-slate-400">↳</span>}</div>
+      <div>{first ? <BankName b={bank} /> : null}</div>
       <div>
         <div className="text-sm font-medium">{conn.title || "(без названия)"}</div>
         <div className="text-xs text-slate-400">Подключено счетов: {n}</div>
       </div>
       <div>
-        <div className="text-sm text-emerald-600">Подключён к приложению</div>
-        <div className="text-xs text-slate-400">Синхронизация раз в день</div>
+        <div className="text-sm text-emerald-600">Подключён к ПланФакту</div>
+        <div className="text-xs text-slate-400">Синхронизация {freqLabel(conn.sync_freq)}{last ? `, последняя: ${last}` : ""}</div>
       </div>
       <div className="flex items-center gap-3 text-slate-400">
         <button title="Получить новые операции" className="hover:text-brand" onClick={onSync}>⟳</button>
-        <button title="Настройки подключения" className="hover:text-brand" onClick={onSettings}>⚙</button>
+        <button title="Настройки синхронизации" className="hover:text-brand" onClick={onSettings}>⚙</button>
         <button title="Отключить" className="hover:text-red-500" onClick={onDelete}>✕</button>
       </div>
     </div>
@@ -176,7 +192,7 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
   const [detect, setDetect] = useState<DetectResult | null>(null);
   const [decisions, setDecisions] = useState<Record<string, { selected: boolean; mode: "existing" | "new"; app_account_id?: number; create_name?: string }>>({});
   const [busy, setBusy] = useState(false);
-  const [connected, setConnected] = useState<{ decisions: AccDecision[] } | null>(null);
+  const [connected, setConnected] = useState<{ decisions: AccDecision[]; connId: number } | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [autoResult, setAutoResult] = useState<any>(null);
 
@@ -233,7 +249,7 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
       }
       if (firstAcc) await api.put(`/api/bank-connections/${c.id}`, { ...connBody, account_id: firstAcc });
       onDone();
-      setConnected({ decisions: finalDec });
+      setConnected({ decisions: finalDec, connId: c.id });
     } finally { setBusy(false); }
   };
 
@@ -244,7 +260,7 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
       try {
         const res = (await api.post("/api/imports/commit", {
           source: bank.slug, filename: detect.filename, legal_entity_id: legalEntityId,
-          accounts: connected.decisions, rows: detect.rows,
+          connection_id: connected.connId, accounts: connected.decisions, rows: detect.rows,
         }, { params: { company_id: companyId } })).data;
         onDone();
         setAutoResult(res);
@@ -255,7 +271,7 @@ function ConnectWizard({ bank, conn, companyId, onClose, onDone }: { bank: Bank;
   // Экран распределения (предпросмотр)
   if (showPreview && detect && connected)
     return <ImportPreviewModal companyId={companyId} source={bank.slug} detect={detect}
-      accounts={connected.decisions} legalEntityId={legalEntityId} onClose={onClose} onDone={onDone} />;
+      accounts={connected.decisions} legalEntityId={legalEntityId} connectionId={connected.connId} onClose={onClose} onDone={onDone} />;
   if (autoResult) return <SuccessModal result={autoResult} onClose={onClose} />;
 
   // Модалка «Интеграция успешно подключена»
@@ -415,7 +431,7 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
   };
   if (detect)
     return <ImportPreviewModal companyId={companyId} source={bank.slug} detect={detect}
-      accounts={decisionsFromDetect(detect)} legalEntityId={conn.legal_entity_id ?? null} onClose={onClose} onDone={onDone} />;
+      accounts={decisionsFromDetect(detect)} legalEntityId={conn.legal_entity_id ?? null} connectionId={conn.id} onClose={onClose} onDone={onDone} />;
   return (
     <Overlay>
       <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
@@ -425,6 +441,84 @@ function SyncUpload({ conn, bank, companyId, onClose, onDone }: any) {
           <span className="text-2xl">📄</span>{busy ? "Распознаём…" : "Загрузите свежую выписку банка"}
           <input type="file" className="hidden" accept=".csv,.xlsx,.xlsm,.txt" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
         </label>
+      </div>
+    </Overlay>
+  );
+}
+
+// ⚙ Настройки синхронизации: маппинг счетов банка → приложения + частота
+function SettingsModal({ conn, bank, companyId, onClose, onDone, onLoad }: any) {
+  const qc = useQueryClient();
+  const accounts = useAccounts();
+  const maps = useQuery({ queryKey: ["bank-maps", conn.id], queryFn: async () => (await api.get(`/api/bank-connections/${conn.id}/accounts`)).data as any[] });
+  const balances = useQuery({
+    queryKey: ["balances", companyId], enabled: !!companyId,
+    queryFn: async () => (await api.get("/api/account-balances", { params: { company_id: companyId } })).data as any[],
+  });
+  const [edited, setEdited] = useState<Record<number, { enabled: boolean; account_id: number | null }>>({});
+  const [freq, setFreq] = useState(conn.sync_freq ?? "daily");
+  const [busy, setBusy] = useState(false);
+  const rowOf = (m: any) => edited[m.id] ?? { enabled: true, account_id: m.account_id };
+  const set = (id: number, patch: any) => setEdited((s) => ({ ...s, [id]: { ...(s[id] ?? { enabled: true, account_id: maps.data!.find((m) => m.id === id)?.account_id ?? null }), ...patch } }));
+  const balOf = (accId?: number | null) => balances.data?.find((x: any) => x.account_id === accId)?.balance;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      for (const m of maps.data ?? []) {
+        const r = rowOf(m);
+        if (!r.enabled) await api.delete(`/api/bank-connections/accounts/${m.id}`);
+        else if (r.account_id !== m.account_id) await api.put(`/api/bank-connections/accounts/${m.id}`, { bank_account: m.bank_account, account_id: r.account_id });
+      }
+      await api.put(`/api/bank-connections/${conn.id}`, { bank: conn.bank, title: conn.title, sync_freq: freq });
+      qc.invalidateQueries({ queryKey: ["bank-maps", conn.id] });
+      onDone();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Overlay>
+      <div className="w-full max-w-3xl rounded-lg bg-white p-6 shadow-xl">
+        <div className="mb-1 flex items-center justify-between">
+          <div className="flex items-center gap-2"><span className={`flex h-8 w-8 items-center justify-center rounded-md text-sm font-bold text-white ${bank.color}`}>{bank.name[0]}</span>
+            <h3 className="text-lg font-semibold">{bank.name}, настройки синхронизации</h3></div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+        <p className="mb-4 text-sm text-slate-500">Подключённые счета отмечены галочкой. Снимите её, чтобы отключить счёт.</p>
+
+        <div className="max-h-[52vh] overflow-auto">
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-3">
+            <div className="text-xs font-semibold uppercase text-slate-400">Счёт в банке</div>
+            <div className="text-xs font-semibold uppercase text-slate-400">Счёт в ПланФакте</div>
+            {maps.data?.map((m) => {
+              const r = rowOf(m);
+              return (
+                <div key={m.id} className="contents">
+                  <label className="flex items-start gap-2 py-1">
+                    <input type="checkbox" className="mt-1" checked={r.enabled} onChange={(e) => set(m.id, { enabled: e.target.checked })} />
+                    <span><span className="font-mono text-xs">{m.bank_account}</span>
+                      <span className="block text-xs text-slate-400">Остаток: {r.account_id ? money(balOf(r.account_id) ?? 0) : "—"}</span></span>
+                  </label>
+                  <select className="input !py-1.5" disabled={!r.enabled} value={r.account_id ?? ""} onChange={(e) => set(m.id, { account_id: e.target.value ? Number(e.target.value) : null })}>
+                    <option value="">— не выбран —</option>
+                    {accounts.data?.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+              );
+            })}
+            {maps.data?.length === 0 && <div className="col-span-2 py-3 text-center text-sm text-slate-400">Счета ещё не сопоставлены — загрузите выписку через ⟳.</div>}
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 border-t pt-4">
+          <div><label className="label">Частота синхронизации счетов</label>
+            <select className="input" value={freq} onChange={(e) => setFreq(e.target.value)}>{SYNC_FREQ.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Отменить</button>
+          <button className="btn-ghost" disabled={busy} onClick={save}>{busy ? "Сохранение…" : "Сохранить"}</button>
+          <button className="btn-primary" disabled={busy} onClick={async () => { await save(); onLoad(); }}>Сохранить и загрузить</button>
+        </div>
       </div>
     </Overlay>
   );

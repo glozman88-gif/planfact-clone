@@ -9,7 +9,7 @@
      перемещения, автосоздаёт новые счета и контрагентов, возвращает счётчики
      новых объектов для финального окна «Данные загружены успешно».
 """
-from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbDep
-from app.models import Account, BankAccountMap, Category, Counterparty, ImportLog, Operation
+from app.models import Account, BankAccountMap, BankConnection, Category, Counterparty, ImportLog, Operation
 from app.models.enums import AccountKind, OperationStatus, OperationType
 from app.services.currency import to_base_amount
 from app.services.import_ops import parse_amount, parse_date, read_table
@@ -211,6 +211,7 @@ class CommitIn(BaseModel):
     source: str = "csv"
     filename: str | None = None
     legal_entity_id: int | None = None
+    connection_id: int | None = None       # для отметки времени последней синхронизации
     accounts: list[AccDecision] = []
     rows: list[CommitRow] = []
 
@@ -301,6 +302,10 @@ async def commit(payload: CommitIn, db: DbDep, _: CurrentUser, company_id: int =
     log = ImportLog(company_id=company_id, source=payload.source, filename=payload.filename,
                     rows_total=len(payload.rows), rows_imported=loaded, status="done")
     db.add(log)
+    if payload.connection_id:
+        conn = await db.get(BankConnection, payload.connection_id)
+        if conn is not None:
+            conn.last_sync_at = datetime.now(timezone.utc)
     await db.commit()
     return {
         "operations": {"loaded": loaded, "total": len(to_load)},

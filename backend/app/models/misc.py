@@ -97,6 +97,10 @@ class BankConnection(Base, TimestampMixin):
     token: Mapped[str | None] = mapped_column(Text)        # API-токен (для method=token) или access_token (oauth)
     client_id: Mapped[str | None] = mapped_column(String(255))
     client_secret: Mapped[str | None] = mapped_column(String(512))
+    # Частота синхронизации счетов: daily | twice | manual
+    sync_freq: Mapped[str | None] = mapped_column(String(16), default="daily")
+    # Время последней загрузки операций по подключению (для «последняя: …»)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class BankAccountMap(Base, TimestampMixin):

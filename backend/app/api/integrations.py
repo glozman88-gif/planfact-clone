@@ -27,6 +27,7 @@ class BankConnIn(BaseModel):
     token: str | None = None
     client_id: str | None = None
     client_secret: str | None = None
+    sync_freq: str | None = None
 
 
 def _out(c: BankConnection) -> dict:
@@ -36,12 +37,16 @@ def _out(c: BankConnection) -> dict:
         "has_token": bool(c.token),
         "token_mask": ("•••• " + c.token[-4:]) if c.token and len(c.token) >= 4 else ("••••" if c.token else None),
         "client_id": c.client_id, "has_secret": bool(c.client_secret),
+        "sync_freq": c.sync_freq or "daily",
+        "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
     }
 
 
 def _apply(conn: BankConnection, payload: BankConnIn) -> None:
     conn.title = payload.title
     conn.account_id = payload.account_id
+    if payload.sync_freq:
+        conn.sync_freq = payload.sync_freq
     if conn.method == "token":
         if payload.token:
             conn.token = payload.token

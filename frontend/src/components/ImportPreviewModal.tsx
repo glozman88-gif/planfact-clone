@@ -35,6 +35,7 @@ interface Props {
   detect: DetectResult;
   accounts: AccDecision[];        // решения по счетам (из мастера/детекта)
   legalEntityId?: number | null;
+  connectionId?: number | null;   // подключение — для отметки времени синхронизации
   onClose: () => void;
   onDone: () => void;             // после успешной загрузки (обновить списки)
 }
@@ -46,7 +47,7 @@ const fmtDate = (iso: string) => {
 };
 const shortAcc = (a?: string | null) => (a ? `…${a.slice(-4)}` : "—");
 
-export function ImportPreviewModal({ companyId, source, detect, accounts, legalEntityId, onClose, onDone }: Props) {
+export function ImportPreviewModal({ companyId, source, detect, accounts, legalEntityId, connectionId, onClose, onDone }: Props) {
   const cats = useCategories();
   const parties = useCounterparties();
   const projects = useProjects();
@@ -67,7 +68,7 @@ export function ImportPreviewModal({ companyId, source, detect, accounts, legalE
     mutationFn: async () =>
       (await api.post("/api/imports/commit", {
         source, filename: detect.filename, legal_entity_id: legalEntityId ?? null,
-        accounts, rows: included,
+        connection_id: connectionId ?? null, accounts, rows: included,
       }, { params: { company_id: companyId } })).data,
     onSuccess: (data) => setResult(data),
   });
