@@ -50,7 +50,7 @@ class AccountGroupOut(ORMModel):
 class AccountIn(BaseModel):
     name: str
     group_id: int | None = None
-    legal_entity_id: int | None = None
+    legal_entity_id: int          # обязательная привязка счёта к юрлицу
     kind: AccountKind = AccountKind.bank
     currency_code: str = "RUB"
     opening_balance: Decimal = Decimal("0")

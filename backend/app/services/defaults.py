@@ -1,7 +1,7 @@
 """Создание базовых справочников при заведении новой компании."""
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Account, Category, Company, DealStatus
+from app.models import Account, Category, Company, DealStatus, LegalEntity
 from app.models.enums import AccountKind, BalanceSection, CashFlowActivity, CategoryKind
 
 # Типовые статьи доходов и расходов (ДДС/ОПиУ)
@@ -49,13 +49,18 @@ SUBCATEGORIES = {
 
 
 async def seed_company_defaults(db: AsyncSession, company: Company) -> None:
-    """Заводит счёт по умолчанию, типовые статьи и этапы воронки."""
+    """Заводит юрлицо и счёт по умолчанию, типовые статьи и этапы воронки."""
+    # Юрлицо по умолчанию — счета обязательно привязываются к юрлицу
+    le = LegalEntity(company_id=company.id, name=company.name or "Моя компания")
+    db.add(le)
+    await db.flush()
     db.add(
         Account(
             company_id=company.id,
             name="Основной счёт",
             kind=AccountKind.bank,
             currency_code=company.base_currency,
+            legal_entity_id=le.id,
         )
     )
     parents: dict[str, Category] = {}

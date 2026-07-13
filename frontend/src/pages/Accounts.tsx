@@ -34,7 +34,7 @@ export function Accounts() {
       fields={[
         { name: "name", label: "Название", required: true },
         { name: "kind", label: "Тип", type: "select", options: KINDS, default: "bank" },
-        { name: "legal_entity_id", label: "Юрлицо", type: "select", options: leOptions },
+        { name: "legal_entity_id", label: "Юрлицо", type: "select", options: leOptions, required: true },
         { name: "currency_code", label: "Валюта", default: "RUB" },
         { name: "opening_balance", label: "Начальный остаток", type: "number", default: "0" },
         { name: "exclude_from_totals", label: "Не учитывать в общем остатке", type: "checkbox" },

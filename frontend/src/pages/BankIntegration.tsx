@@ -281,7 +281,9 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
       v.mode === "existing" ? { bank_account, app_account_id: v.app_account_id } : { bank_account, create: true, create_name: v.create_name });
 
   const finish = async () => {
-    setBusy(true);
+    const willCreate = Object.values(decisions).some((v) => v.selected && v.mode === "new");
+    if (willCreate && !legalEntityId) { setErr("Выберите юрлицо для новых счетов"); return; }
+    setBusy(true); setErr("");
     try {
       // 1) подключение: для T-Bank сохраняем токен; иначе уже создано на авторизации
       const connBody: any = { bank: bank.slug, title: title || null, sync_freq: freq };
@@ -480,7 +482,15 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
                     );
                   })}
                 </div>
-                <div className="grid grid-cols-2 gap-3 border-t pt-3">
+                <div className="border-t pt-3">
+                  <label className="label">Юрлицо для новых счетов <span className="text-red-500">*</span></label>
+                  <select className="input" value={legalEntityId ?? ""} onChange={(e) => setLegalEntityId(e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">— выберите юрлицо —</option>
+                    {entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </select>
+                  <p className="mt-1 text-xs text-slate-400">Создаваемые счёта будут привязаны к этому юрлицу (обязательно).</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
                   <div><label className="label">Начало синхронизации</label>
                     <select className="input" value={period} onChange={(e) => setPeriod(e.target.value)}>{SYNC_PERIODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label className="label">Частота синхронизации счетов</label>
@@ -488,6 +498,7 @@ function ConnectWizard({ bank, conn, startStep, companyId, onClose, onDone }: { 
                 </div>
               </>
             )}
+            {err && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>}
             <div className="flex justify-between"><button className="btn-ghost" onClick={() => setStep(2)}>Назад</button>
               <button className="btn-primary" disabled={busy} onClick={finish}>{busy ? "Подключаем…" : "Завершить подключение"}</button></div>
           </div>
