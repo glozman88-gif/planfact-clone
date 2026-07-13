@@ -324,10 +324,11 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
     amount: op.amount ?? "", currency_code: op.currency_code ?? "RUB",
     category_id: op.category_id ?? "", debit_category_id: op.debit_category_id ?? "", credit_category_id: op.credit_category_id ?? "",
     project_id: op.project_id ?? "", counterparty_id: op.counterparty_id ?? "", description: op.description ?? "",
+    excluded: op.excluded ?? false,
     id: op.id,
   });
   const [split, setSplit] = useState<boolean>(!!(op.items && op.items.length));
-  const [items, setItems] = useState<any[]>(op.items?.length ? op.items.map((i: any) => ({ ...i })) : [{ amount: "", category_id: "", project_id: "" }]);
+  const [items, setItems] = useState<any[]>(op.items?.length ? op.items.map((i: any) => ({ ...i })) : [{ amount: "", category_id: "", project_id: "", excluded: false }]);
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
 
   const isMove = f.type === "move", isAccrual = f.type === "accrual";
@@ -365,7 +366,8 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
       credit_category_id: isAccrual ? (f.credit_category_id || null) : null,
       project_id: f.project_id || null, counterparty_id: f.counterparty_id || null,
       description: f.description || null,
-      items: (!isMove && !isAccrual && split) ? items.filter((i) => i.amount).map((i) => ({ amount: String(i.amount), category_id: i.category_id || null, project_id: i.project_id || null })) : [],
+      excluded: !!f.excluded,
+      items: (!isMove && !isAccrual && split) ? items.filter((i) => i.amount).map((i) => ({ amount: String(i.amount), category_id: i.category_id || null, project_id: i.project_id || null, excluded: !!i.excluded })) : [],
       id: f.id,
     };
     onSave(payload);
@@ -484,14 +486,25 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
                       <option value="">Проект…</option>
                       {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
+                    <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-500" title="Не учитывать эту часть в доходах/расходах (ОПиУ)">
+                      <input type="checkbox" checked={!!it.excluded} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, excluded: e.target.checked } : x))} /> не учит.
+                    </label>
                     <button type="button" className="text-red-500" onClick={() => setItems(items.filter((_, i) => i !== idx))}>×</button>
                   </div>
                 ))}
-                <button type="button" className="btn-ghost" onClick={() => setItems([...items, { amount: "", category_id: "", project_id: "" }])}>+ часть</button>
+                <button type="button" className="btn-ghost" onClick={() => setItems([...items, { amount: "", category_id: "", project_id: "", excluded: false }])}>+ часть</button>
                 <div className="text-xs text-slate-500">Сумма частей должна равняться сумме операции ({f.amount || 0}).</div>
               </div>
             )}
           </div>
+        )}
+
+        {/* Не учитывать в доходах/расходах (ОПиУ) — для прихода/расхода без разбивки */}
+        {!isMove && !isAccrual && !split && (
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={!!f.excluded} onChange={(e) => set("excluded", e.target.checked)} />
+            Не учитывать в доходах/расходах (отчёт ОПиУ) — например, займы, перемещения, личные операции
+          </label>
         )}
 
         {error && (

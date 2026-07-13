@@ -74,14 +74,24 @@ def _pnl_legs(op: Operation):
     """Ноги операции для ОПиУ: (category_id, amount).
 
     Начисление (accrual) раскрывается в дебетовую и кредитовую ноги по своим
-    статьям (Дт расход / Кт доход и т.п.). Остальные типы — по частям items[]."""
+    статьям (Дт расход / Кт доход и т.п.). Остальные типы — по частям items[].
+    Исключённые операции и части разбивки (excluded) в доходы/расходы не идут."""
+    if getattr(op, "excluded", False):
+        return
     if op.type == OperationType.accrual:
         amt = _amount(op)
         yield op.debit_category_id, amt
         yield op.credit_category_id, amt
+    elif op.items:
+        total = _amount(op)
+        raw = op.amount or ZERO
+        for it in op.items:
+            if getattr(it, "excluded", False):
+                continue
+            share = (it.amount / raw * total) if raw else ZERO
+            yield it.category_id, share
     else:
-        for cat_id, _proj, amount in _lines(op):
-            yield cat_id, amount
+        yield op.category_id, _amount(op)
 
 
 async def _section(
