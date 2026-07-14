@@ -234,7 +234,9 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
     if not app_ids:
         raise HTTPException(400, "Нет сопоставленных счетов")
 
-    d_from = date_from or "2023-06-01"
+    # По умолчанию — с начала текущего года (осмысленный начальный остаток на 1 января);
+    # период можно расширить, передав date_from.
+    d_from = date_from or f"{date.today().year}-01-01"
     d_till = date.today().isoformat()
     nums = list(num_to_acc.keys())
     rows = await _client_operations(slug, conn.token, nums, d_from, d_till)
@@ -330,15 +332,16 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
         add_net(acc_id, to_id, r["type"], amt)
         new_count += 1
 
-    # Начальный остаток НЕ трогаем: он вводится пользователем, а остаток счёта = начальный остаток
-    # + движение по операциям. Из банка берём только овердрафт (кредитный лимит) — как справочную
-    # информацию, он в остаток не входит и показывается отдельно.
+    # Начальный остаток = остаток на начало периода (банковский остаток без овердрафта − движение
+    # по загруженным операциям). Тогда остаток счёта = начальный остаток + движение = текущий
+    # остаток в банке. Овердрафт (кредитный лимит) — отдельно, в остаток не входит.
     reconciled = 0
     for num, aid in num_to_acc.items():
         bb = bank_bal.get(num)
         acc = await db.get(Account, aid)
         if acc is None or bb is None:
             continue
+        acc.opening_balance = (Decimal(str(bb["balance"])) - net.get(aid, Decimal("0"))).quantize(Decimal("0.01"))
         acc.credit_limit = Decimal(str(bb.get("overdraft") or 0)).quantize(Decimal("0.01"))
         reconciled += 1
 

@@ -252,12 +252,16 @@ _BULK_FIELDS = {"account_id", "category_id", "project_id", "counterparty_id", "d
 
 @router.post("/delete-all")
 async def delete_all(db: DbDep, _: CurrentUser, company_id: int = Query(...), account_id: int | None = None):
-    """Удалить ВСЕ операции компании (или все по конкретному счёту)."""
-    from sqlalchemy import delete as sql_delete, or_
+    """Удалить ВСЕ операции компании (или все по конкретному счёту) и обнулить начальные
+    остатки затронутых счетов — чтобы остаток стал 0."""
+    from sqlalchemy import delete as sql_delete, or_, update
     conds = [Operation.company_id == company_id]
+    acc_conds = [Account.company_id == company_id]
     if account_id:
         conds.append(or_(Operation.account_id == account_id, Operation.to_account_id == account_id))
+        acc_conds.append(Account.id == account_id)
     res = await db.execute(sql_delete(Operation).where(*conds))
+    await db.execute(update(Account).where(*acc_conds).values(opening_balance=0, credit_limit=0))
     await db.commit()
     return {"deleted": res.rowcount}
 
