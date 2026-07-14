@@ -173,14 +173,18 @@ class OpsIn(BaseModel):
     date_till: str | None = None
 
 
-async def _client_operations(slug: str, token: str, nums: list[str], d_from: str, d_till: str) -> list[dict]:
+async def _client_operations(slug: str, token: str, nums: list[str], d_from: str, d_till: str):
+    """Возвращает (rows, saldo_in) — операции и остаток на начало периода по счёту (если банк отдаёт)."""
     own = set(nums)
     rows: list[dict] = []
+    saldo_in: dict[str, Decimal] = {}
     if slug == "tbank":
         for num in nums:
             try:
                 stmt = await tbank.get_statement(token, num, d_from, d_till)
                 rows.extend(tbank.normalize_operations(stmt, own))
+                if stmt.get("saldoIn") is not None:
+                    saldo_in[num] = Decimal(str(stmt["saldoIn"]))
             except Exception:
                 continue
     elif slug == "tochka":
@@ -195,7 +199,7 @@ async def _client_operations(slug: str, token: str, nums: list[str], d_from: str
                 rows.extend(await tochka.get_operations(token, aid, d_from, d_till))
             except Exception:
                 continue
-    return rows
+    return rows, saldo_in
 
 
 async def _bank_balances(slug: str, token: str) -> dict[str, dict]:
@@ -234,12 +238,11 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
     if not app_ids:
         raise HTTPException(400, "Нет сопоставленных счетов")
 
-    # По умолчанию — с начала текущего года (осмысленный начальный остаток на 1 января);
-    # период можно расширить, передав date_from.
-    d_from = date_from or f"{date.today().year}-01-01"
+    # По умолчанию тянем всю доступную историю (данные Т-Бизнес доступны с июня 2023).
+    d_from = date_from or "2015-01-01"
     d_till = date.today().isoformat()
     nums = list(num_to_acc.keys())
-    rows = await _client_operations(slug, conn.token, nums, d_from, d_till)
+    rows, saldo_in = await _client_operations(slug, conn.token, nums, d_from, d_till)
     bank_bal = await _bank_balances(slug, conn.token)
 
     # авто-распределение по правилам + сопоставление контрагентов
@@ -332,9 +335,9 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
         add_net(acc_id, to_id, r["type"], amt)
         new_count += 1
 
-    # Начальный остаток = остаток на начало периода (банковский остаток без овердрафта − движение
-    # по загруженным операциям). Тогда остаток счёта = начальный остаток + движение = текущий
-    # остаток в банке. Овердрафт (кредитный лимит) — отдельно, в остаток не входит.
+    # Начальный остаток = текущий остаток в банке (без овердрафта) − движение по загруженным
+    # операциям. Гарантирует: остаток счёта = начальный + движение = текущий остаток в банке,
+    # независимо от периода и особенностей выписки. Овердрафт (кредитный лимит) — отдельно.
     reconciled = 0
     for num, aid in num_to_acc.items():
         bb = bank_bal.get(num)
@@ -367,7 +370,7 @@ async def operations(slug: str, payload: OpsIn, db: DbDep, _: CurrentUser, compa
         raise HTTPException(400, "Не указан токен")
     d_from = payload.date_from or f"{date.today().year}-01-01"
     d_till = payload.date_till or date.today().isoformat()
-    rows = await _client_operations(slug, token, nums, d_from, d_till)
+    rows, _saldo = await _client_operations(slug, token, nums, d_from, d_till)
 
     parties = {p.name.strip().lower(): p.id for p in (await db.execute(
         select(Counterparty).where(Counterparty.company_id == company_id))).scalars()}
