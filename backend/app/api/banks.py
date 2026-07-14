@@ -330,14 +330,15 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
         add_net(acc_id, to_id, r["type"], amt)
         new_count += 1
 
-    # Сверка: opening_balance = остаток банка (без овердрафта) − движение; овердрафт → credit_limit
+    # Начальный остаток НЕ трогаем: он вводится пользователем, а остаток счёта = начальный остаток
+    # + движение по операциям. Из банка берём только овердрафт (кредитный лимит) — как справочную
+    # информацию, он в остаток не входит и показывается отдельно.
     reconciled = 0
     for num, aid in num_to_acc.items():
         bb = bank_bal.get(num)
         acc = await db.get(Account, aid)
         if acc is None or bb is None:
             continue
-        acc.opening_balance = (Decimal(str(bb["balance"])) - net.get(aid, Decimal("0"))).quantize(Decimal("0.01"))
         acc.credit_limit = Decimal(str(bb.get("overdraft") or 0)).quantize(Decimal("0.01"))
         reconciled += 1
 
