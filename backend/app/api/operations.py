@@ -155,7 +155,11 @@ def _op_conds(company_id, date_from, date_to, type, types, status,
     if deal_id:
         conds.append(Operation.deal_id == deal_id)
     if search:
-        conds.append(Operation.description.ilike(f"%{search}%"))
+        like = f"%{search}%"
+        # поиск по назначению ИЛИ по имени контрагента
+        cp_ids = select(Counterparty.id).where(
+            Counterparty.company_id == company_id, Counterparty.name.ilike(like))
+        conds.append(Operation.description.ilike(like) | Operation.counterparty_id.in_(cp_ids))
     return conds
 
 
