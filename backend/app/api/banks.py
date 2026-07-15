@@ -333,13 +333,13 @@ async def resync_core(db, slug: str, conn, date_from: str | None = None) -> dict
         seen_new.add(sig)
         if r["type"] == "move":
             op = Operation(company_id=company_id, type=OperationType.move, status=OperationStatus.committed,
-                           op_date=d, account_id=acc_id, to_account_id=to_id, amount=amt, currency_code="RUB",
+                           op_date=d, accrual_date=d, account_id=acc_id, to_account_id=to_id, amount=amt, currency_code="RUB",
                            category_id=r.get("category_id"), project_id=r.get("project_id"),
                            description=r.get("description"), external_id=ext)
         else:
             otype = OperationType.income if r["type"] == "income" else OperationType.outcome
             op = Operation(company_id=company_id, type=otype, status=OperationStatus.committed,
-                           op_date=d, account_id=acc_id, amount=amt, currency_code="RUB",
+                           op_date=d, accrual_date=d, account_id=acc_id, amount=amt, currency_code="RUB",
                            counterparty_id=r.get("counterparty_id"), category_id=r.get("category_id"),
                            project_id=r.get("project_id"), description=r.get("description"), external_id=ext)
         op.base_amount = await to_base_amount(db, company_id, amt, "RUB", d)

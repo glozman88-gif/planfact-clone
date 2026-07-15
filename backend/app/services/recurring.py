@@ -67,7 +67,7 @@ async def generate_due(db: AsyncSession, company_id: int, as_of: date) -> dict:
                     company_id=company_id,
                     type=tpl.type,
                     op_date=nd,
-                    accrual_date=nd if tpl.type == OperationType.accrual else None,
+                    accrual_date=nd,  # дата начисления по умолчанию = дате операции
                     amount=tpl.amount,
                     currency_code=tpl.currency_code,
                     account_id=tpl.account_id,

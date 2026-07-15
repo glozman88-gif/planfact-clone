@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.db import Base
@@ -85,3 +86,28 @@ async def test_pnl(session):
     r = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28))
     assert D(r["profit_by_period"]["2026-01"]) == D("300")
     assert D(r["profit_total"]) == D("600")
+
+
+@pytest.mark.asyncio
+async def test_pnl_include_excluded_toggle(session):
+    """Переключатель «с исключёнными»: операция с отметкой «не учитывать» не входит в
+    ОПиУ по умолчанию, но входит при include_excluded=True."""
+    company = await _setup(session)
+    rev = (await session.execute(
+        select(Category).where(Category.name == "Выручка"))).scalar_one()
+    acc = (await session.execute(select(Account))).scalars().first()
+    session.add(Operation(
+        company_id=company.id, type=OperationType.income, status=OperationStatus.committed,
+        op_date=date(2026, 1, 15), account_id=acc.id, amount=Decimal("1000"), base_amount=Decimal("1000"),
+        category_id=rev.id, excluded=True))
+    await session.commit()
+
+    # по умолчанию исключённая 1000 не входит: прибыль как раньше
+    base = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28))
+    assert D(base["profit_total"]) == D("600")
+
+    # с переключателем — исключённая 1000 добавляется к доходам
+    withx = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28),
+                                 include_excluded=True)
+    assert D(withx["profit_total"]) == D("1600")
+    assert D(withx["profit_by_period"]["2026-01"]) == D("1300")

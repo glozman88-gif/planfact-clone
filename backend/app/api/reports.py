@@ -52,9 +52,10 @@ async def pnl(
     group_by: str = "category",
     with_plan: bool = False,
     legal_entity_id: int | None = None,
+    include_excluded: bool = False,
 ):
     return await rep.pnl_report(db, company_id, date_from, date_to, method, group_by, with_plan,
-                                legal_entity_id=legal_entity_id)
+                                legal_entity_id=legal_entity_id, include_excluded=include_excluded)
 
 
 @router.get("/pnl-operations")
@@ -66,9 +67,11 @@ async def pnl_operations(
     date_to: date = Query(...),
     category_id: int | None = Query(None),
     method: str = "accrual",
+    include_excluded: bool = False,
 ):
     """Детализация статьи ОПиУ до списка операций (разворачивание статьи)."""
-    return await rep.pnl_category_operations(db, company_id, category_id, date_from, date_to, method)
+    return await rep.pnl_category_operations(db, company_id, category_id, date_from, date_to, method,
+                                             include_excluded=include_excluded)
 
 
 @router.get("/payment-calendar")
@@ -101,9 +104,10 @@ async def pnl_export(
     date_to: date = Query(...),
     method: str = "accrual",
     legal_entity_id: int | None = None,
+    include_excluded: bool = False,
 ):
     rep_data = await rep.pnl_report(db, company_id, date_from, date_to, method, "category", False,
-                                    legal_entity_id=legal_entity_id)
+                                    legal_entity_id=legal_entity_id, include_excluded=include_excluded)
     data = xlsx.pnl_xlsx(rep_data, date_from=date_from.isoformat(), date_to=date_to.isoformat())
     return xlsx_response(data, f"pnl_{date_from.isoformat()}_{date_to.isoformat()}.xlsx")
 

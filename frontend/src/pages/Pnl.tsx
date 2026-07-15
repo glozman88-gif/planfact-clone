@@ -17,6 +17,7 @@ export function Pnl() {
   const [method, setMethod] = useState<"accrual" | "cash">("accrual");
   const [groupBy, setGroupBy] = useState<"category" | "project" | "deal">("category");
   const [withPlan, setWithPlan] = useState(false);
+  const [includeExcluded, setIncludeExcluded] = useState(false);
   const [legalEntityId, setLegalEntityId] = useState("");
 
   const qc = useQueryClient();
@@ -28,10 +29,10 @@ export function Pnl() {
   const [editId, setEditId] = useState<number | null>(null);
 
   const q = useQuery({
-    queryKey: ["pnl", companyId, range, method, groupBy, withPlan, legalEntityId],
+    queryKey: ["pnl", companyId, range, method, groupBy, withPlan, legalEntityId, includeExcluded],
     enabled: !!companyId,
     queryFn: async () =>
-      (await api.get<PnlReport>("/api/reports/pnl", { params: { company_id: companyId, method, group_by: groupBy, with_plan: withPlan, legal_entity_id: legalEntityId || undefined, ...range } })).data,
+      (await api.get<PnlReport>("/api/reports/pnl", { params: { company_id: companyId, method, group_by: groupBy, with_plan: withPlan, legal_entity_id: legalEntityId || undefined, include_excluded: includeExcluded, ...range } })).data,
   });
   const r = q.data;
 
@@ -80,6 +81,10 @@ export function Pnl() {
           <input type="checkbox" checked={withPlan} onChange={(e) => setWithPlan(e.target.checked)} />
           План + Факт
         </label>
+        <label className="card flex items-center gap-2 px-3 py-2 text-sm" title="Показать отчёт с учётом операций, помеченных «не учитывать в отчёте»">
+          <input type="checkbox" checked={includeExcluded} onChange={(e) => setIncludeExcluded(e.target.checked)} />
+          С исключёнными
+        </label>
         {(legalEntities.data?.length ?? 0) > 0 && (
           <select className="input !w-48" value={legalEntityId} onChange={(e) => setLegalEntityId(e.target.value)}>
             <option value="">Все юрлица</option>
@@ -89,7 +94,7 @@ export function Pnl() {
         <div className="ml-auto">
           <ExportButton
             url="/api/reports/pnl/export"
-            params={{ company_id: companyId, method, legal_entity_id: legalEntityId || undefined, ...range }}
+            params={{ company_id: companyId, method, legal_entity_id: legalEntityId || undefined, include_excluded: includeExcluded, ...range }}
             filename={`pnl_${range.date_from}_${range.date_to}.xlsx`}
           />
         </div>
@@ -135,8 +140,8 @@ export function Pnl() {
               </tr>
             </thead>
             <tbody>
-              <Section title="Доходы" section={r.income} periods={r.periods} color="text-emerald-700" ctx={{ companyId, range, method, onEditOp: setEditId }} />
-              <Section title="Расходы" section={r.outcome} periods={r.periods} color="text-red-700" ctx={{ companyId, range, method, onEditOp: setEditId }} />
+              <Section title="Доходы" section={r.income} periods={r.periods} color="text-emerald-700" ctx={{ companyId, range, method, includeExcluded, onEditOp: setEditId }} />
+              <Section title="Расходы" section={r.outcome} periods={r.periods} color="text-red-700" ctx={{ companyId, range, method, includeExcluded, onEditOp: setEditId }} />
               <tr className="bg-brand-light font-bold">
                 <td className="sticky left-0 bg-brand-light">Чистая прибыль</td>
                 <td className="text-center"><Sparkline values={vals(r.profit_by_period, r.periods)} /></td>
@@ -230,7 +235,7 @@ function MetricsPanel({ m }: { m: Record<string, string> }) {
   );
 }
 
-type Ctx = { companyId: number | null; range: Range; method: string; onEditOp: (id: number) => void };
+type Ctx = { companyId: number | null; range: Range; method: string; includeExcluded: boolean; onEditOp: (id: number) => void };
 
 function Section({ title, section, periods, color, ctx }:
   { title: string; section: ReportSection; periods: string[]; color: string; ctx: Ctx }) {
@@ -256,11 +261,11 @@ function CategoryRow({ cat, depth, periods, ctx }:
   const expandable = hasChildren || !!cat.has_operations;
 
   const ops = useQuery({
-    queryKey: ["pnl-ops", ctx.companyId, cat.category_id, ctx.method, ctx.range],
+    queryKey: ["pnl-ops", ctx.companyId, cat.category_id, ctx.method, ctx.range, ctx.includeExcluded],
     enabled: open && !hasChildren && !!cat.has_operations,
     queryFn: async () => (await api.get<PnlOperation[]>("/api/reports/pnl-operations", {
       params: {
-        company_id: ctx.companyId, method: ctx.method, ...ctx.range,
+        company_id: ctx.companyId, method: ctx.method, include_excluded: ctx.includeExcluded, ...ctx.range,
         ...(cat.category_id != null ? { category_id: cat.category_id } : {}),
       },
     })).data,
@@ -289,6 +294,7 @@ function CategoryRow({ cat, depth, periods, ctx }:
             <span className="text-slate-400">✎ {o.date}</span>
             {" · "}{o.description || o.counterparty || o.project || "операция"}
             {o.project ? <span className="ml-1 rounded bg-slate-100 px-1">{o.project}</span> : null}
+            {o.excluded ? <span className="ml-1 rounded bg-amber-100 px-1 text-amber-700" title="Помечена «не учитывать в отчёте»">не учитывать</span> : null}
           </td>
           <td></td>
           {periods.map((p) => (

@@ -286,7 +286,7 @@ async def commit(payload: CommitIn, db: DbDep, _: CurrentUser, company_id: int =
         if r.type == "move":
             op = Operation(
                 company_id=company_id, type=OperationType.move, status=OperationStatus.committed,
-                op_date=d, account_id=acc_id, to_account_id=resolve_acc(r.to_account),
+                op_date=d, accrual_date=d, account_id=acc_id, to_account_id=resolve_acc(r.to_account),
                 amount=amount, currency_code="RUB", category_id=r.category_id,
                 project_id=r.project_id, description=r.description,
             )
@@ -295,7 +295,7 @@ async def commit(payload: CommitIn, db: DbDep, _: CurrentUser, company_id: int =
             acc = await db.get(Account, acc_id) if acc_id else None
             op = Operation(
                 company_id=company_id, type=otype, status=OperationStatus.committed,
-                op_date=d, account_id=acc_id, amount=amount,
+                op_date=d, accrual_date=d, account_id=acc_id, amount=amount,
                 currency_code=acc.currency_code if acc else "RUB",
                 category_id=r.category_id, counterparty_id=party_id,
                 project_id=r.project_id, description=r.description,

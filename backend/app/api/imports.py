@@ -146,7 +146,7 @@ async def import_operations(
             parties[party.name.strip().lower()] = party
         # Проект — только сопоставление по имени
         proj = projects.get(cell(row, "project").lower())
-        accrual_d = parse_date(cell(row, "accrual_date"))
+        accrual_d = parse_date(cell(row, "accrual_date")) or d  # нет даты начисления → дата оплаты
 
         op = Operation(
             company_id=company_id,
@@ -295,6 +295,7 @@ async def import_operations_csv(
             type=otype,
             status=OperationStatus.committed,
             op_date=d,
+            accrual_date=d,
             account_id=acc.id if acc else None,
             amount=amount,
             currency_code=acc.currency_code if acc else "RUB",

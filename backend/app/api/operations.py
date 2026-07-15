@@ -228,7 +228,9 @@ async def create_operation(payload: OperationIn, db: DbDep, _: CurrentUser, comp
     await _validate_refs(db, payload)
     await _check_period_open(db, company_id, payload.op_date, payload.accrual_date)
     data = payload.model_dump(exclude={"items"})
-    if payload.type == OperationType.accrual:  # A7: у начисления дата начисления = дате операции
+    # A7: у начисления дата начисления = дате операции; для остальных типов, если дата
+    # начисления не указана — по умолчанию = дате оплаты (чтобы поле не оставалось пустым).
+    if payload.type == OperationType.accrual or data.get("accrual_date") is None:
         data["accrual_date"] = data["op_date"]
     op = Operation(company_id=company_id, **data)
     op.base_amount = await to_base_amount(db, company_id, op.amount, op.currency_code, op.op_date)
@@ -480,7 +482,8 @@ async def update_operation(op_id: int, payload: OperationIn, db: DbDep, _: Curre
     # запрещаем и трогать операцию в закрытом периоде, и переносить её в закрытый период
     await _check_period_open(db, op.company_id, op.op_date, op.accrual_date, payload.op_date, payload.accrual_date)
     data = payload.model_dump(exclude={"items"})
-    if payload.type == OperationType.accrual:  # A7
+    # A7 + дефолт даты начисления = дате оплаты, если не указана (см. create_operation)
+    if payload.type == OperationType.accrual or data.get("accrual_date") is None:
         data["accrual_date"] = data["op_date"]
     for k, v in data.items():
         setattr(op, k, v)

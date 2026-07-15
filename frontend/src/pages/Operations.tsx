@@ -353,7 +353,7 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
   const [f, setF] = useState<any>({
     type: op.type ?? "income", status: op.status ?? "committed",
     is_calculation_committed: op.is_calculation_committed ?? true, is_opu_calculation: op.is_opu_calculation ?? false,
-    op_date: op.op_date ?? today(), accrual_date: op.accrual_date ?? "",
+    op_date: op.op_date ?? today(), accrual_date: op.accrual_date ?? op.op_date ?? today(),
     account_id: op.account_id ?? "", to_account_id: op.to_account_id ?? "",
     amount: op.amount ?? "", currency_code: op.currency_code ?? "RUB",
     category_id: op.category_id ?? "", debit_category_id: op.debit_category_id ?? "", credit_category_id: op.credit_category_id ?? "",
@@ -364,6 +364,12 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
   const [split, setSplit] = useState<boolean>(!!(op.items && op.items.length));
   const [items, setItems] = useState<any[]>(op.items?.length ? op.items.map((i: any) => ({ ...i })) : [{ amount: "", category_id: "", project_id: "", excluded: false }]);
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
+  // Дата оплаты: пока дату начисления не меняли вручную (она равна прежней дате оплаты
+  // или пуста) — держим её синхронной с датой оплаты, чтобы не оставалась пустой.
+  const setOpDate = (v: string) => setF((prev: any) => ({
+    ...prev, op_date: v,
+    accrual_date: (!prev.accrual_date || prev.accrual_date === prev.op_date) ? v : prev.accrual_date,
+  }));
 
   const isMove = f.type === "move", isAccrual = f.type === "accrual";
   // Парное перемещение (деньги в пути) доступно только при создании нового move
@@ -425,7 +431,7 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">{isAccrual ? "Дата начисления" : (canPair && paired ? "Дата списания" : "Дата оплаты")}</label>
-            <input type="date" className="input" value={f.op_date} onChange={(e) => set("op_date", e.target.value)} required />
+            <input type="date" className="input" value={f.op_date} onChange={(e) => setOpDate(e.target.value)} required />
           </div>
           <div>
             <label className="label">Сумма</label>
@@ -481,7 +487,7 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
               <div><label className="label">Счёт</label><Opt v={f.account_id} on={(v) => set("account_id", v)} list={accounts} /></div>
               <div>
                 <label className="label">Дата начисления</label>
-                <input type="date" className="input" value={f.accrual_date} onChange={(e) => set("accrual_date", e.target.value)} />
+                <input type="date" className="input" value={f.accrual_date} onChange={(e) => set("accrual_date", e.target.value)} required />
               </div>
               <label className="col-span-2 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={f.is_calculation_committed} onChange={(e) => set("is_calculation_committed", e.target.checked)} />

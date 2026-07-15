@@ -70,13 +70,15 @@ def _fallback_kind(op: Operation) -> CategoryKind | None:
     return None
 
 
-def _pnl_legs(op: Operation):
+def _pnl_legs(op: Operation, include_excluded: bool = False):
     """Ноги операции для ОПиУ: (category_id, amount).
 
     Начисление (accrual) раскрывается в дебетовую и кредитовую ноги по своим
     статьям (Дт расход / Кт доход и т.п.). Остальные типы — по частям items[].
-    Исключённые операции и части разбивки (excluded) в доходы/расходы не идут."""
-    if getattr(op, "excluded", False):
+    Исключённые операции и части разбивки (excluded) в доходы/расходы не идут,
+    кроме случая include_excluded=True (переключатель «показать с учётом
+    исключённых» — чтобы посмотреть отчёт независимо от отметок «не учитывать»)."""
+    if not include_excluded and getattr(op, "excluded", False):
         return
     if op.type == OperationType.accrual:
         amt = _amount(op)
@@ -86,7 +88,7 @@ def _pnl_legs(op: Operation):
         total = _amount(op)
         raw = op.amount or ZERO
         for it in op.items:
-            if getattr(it, "excluded", False):
+            if not include_excluded and getattr(it, "excluded", False):
                 continue
             share = (it.amount / raw * total) if raw else ZERO
             yield it.category_id, share
@@ -102,13 +104,14 @@ async def _section(
     kind: CategoryKind,
     cats: dict[int, Category],
     use_accrual: bool,
+    include_excluded: bool = False,
 ):
     """Строит секцию отчёта (доходы или расходы) с разбивкой по статьям и месяцам."""
     by_cat: dict[int | None, dict[str, Decimal]] = defaultdict(lambda: _empty_periods(periods))
     for op in ops:
         # тип строки определяем по статье части (доход/расход), а не по типу операции,
         # т.к. accrual/отгрузка/поставка могут быть и доходом, и расходом
-        for cat_id, amount in _pnl_legs(op):
+        for cat_id, amount in _pnl_legs(op, include_excluded):
             cat = cats.get(cat_id) if cat_id else None
             if cat is not None:
                 row_kind = cat.kind
@@ -679,7 +682,7 @@ async def _pnl_groups(periods, ops, cats, use_accrual, group_by, names):
 
 async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to: date,
                      method: str = "accrual", group_by: str = "category", with_plan: bool = False,
-                     legal_entity_id: int | None = None):
+                     legal_entity_id: int | None = None, include_excluded: bool = False):
     """ОПиУ: доходы и расходы и прибыль.
 
     method="accrual" — метод начисления (по дате начисления, включая операции «начисление»).
@@ -687,6 +690,8 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
     group_by="category"|"project"|"deal" — разрез отчёта (D1).
     legal_entity_id — фильтр по юрлицу (операции по счетам юрлица; начисления без счёта
     под фильтром не учитываются — у них нет привязки к юрлицу).
+    include_excluded=True — включить в отчёт операции/части с отметкой «не учитывать»
+    (переключатель UI: смотреть отчёт независимо от отметок «не учитывать в отчёте»).
     """
     periods = month_range(date_from, date_to)
     cats = await _categories(db, company_id)
@@ -741,8 +746,10 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
     if le_accounts is not None:
         ops = [o for o in ops if o.account_id in le_accounts]
 
-    income, inc_tot = await _section(db, company_id, periods, ops, CategoryKind.income, cats, use_accrual=use_accrual)
-    outcome, out_tot = await _section(db, company_id, periods, ops, CategoryKind.outcome, cats, use_accrual=use_accrual)
+    income, inc_tot = await _section(db, company_id, periods, ops, CategoryKind.income, cats,
+                                     use_accrual=use_accrual, include_excluded=include_excluded)
+    outcome, out_tot = await _section(db, company_id, periods, ops, CategoryKind.outcome, cats,
+                                      use_accrual=use_accrual, include_excluded=include_excluded)
 
     # D1: разрез по проектам/сделкам
     groups = None
@@ -776,8 +783,10 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
             ).options(selectinload(Operation.items)))).scalars().all()
         if le_accounts is not None:
             pops = [o for o in pops if o.account_id in le_accounts]
-        _, p_inc = await _section(db, company_id, periods, pops, CategoryKind.income, cats, use_accrual=use_accrual)
-        _, p_out = await _section(db, company_id, periods, pops, CategoryKind.outcome, cats, use_accrual=use_accrual)
+        _, p_inc = await _section(db, company_id, periods, pops, CategoryKind.income, cats,
+                                  use_accrual=use_accrual, include_excluded=include_excluded)
+        _, p_out = await _section(db, company_id, periods, pops, CategoryKind.outcome, cats,
+                                  use_accrual=use_accrual, include_excluded=include_excluded)
         p_profit = {p: p_inc[p] - p_out[p] for p in periods}
         plan_block = {
             "income_by_period": {p: str(p_inc[p]) for p in periods},
@@ -871,9 +880,12 @@ async def _pnl_ops(db, company_id, date_from, date_to, use_accrual):
 
 
 async def pnl_category_operations(db: AsyncSession, company_id: int, category_id: int | None,
-                                  date_from: date, date_to: date, method: str = "accrual"):
+                                  date_from: date, date_to: date, method: str = "accrual",
+                                  include_excluded: bool = False):
     """Список операций, формирующих сумму статьи ОПиУ за период (детализация при
-    разворачивании статьи до операций). Сумма = вклад каждой ноги в эту статью."""
+    разворачивании статьи до операций). Сумма = вклад каждой ноги в эту статью.
+    include_excluded=True — показывать и операции с отметкой «не учитывать» (в тон
+    переключателю отчёта)."""
     use_accrual = method != "cash"
     parties = {c.id: c.name for c in (await db.execute(
         select(Counterparty).where(Counterparty.company_id == company_id))).scalars()}
@@ -883,7 +895,7 @@ async def pnl_category_operations(db: AsyncSession, company_id: int, category_id
 
     rows = []
     for op in ops:
-        for cat_id, amount in _pnl_legs(op):
+        for cat_id, amount in _pnl_legs(op, include_excluded):
             # сопоставление статьи ноги с запрошенной (учёт «Без статьи» = None)
             if cat_id != category_id:
                 continue
@@ -893,6 +905,7 @@ async def pnl_category_operations(db: AsyncSession, company_id: int, category_id
                 "amount": str(amount), "description": op.description,
                 "counterparty": parties.get(op.counterparty_id),
                 "project": projects.get(op.project_id),
+                "excluded": bool(getattr(op, "excluded", False)),
             })
     rows.sort(key=lambda r: r["date"], reverse=True)
     return rows

@@ -215,6 +215,7 @@ export interface PnlOperation {
   description: string | null;
   counterparty: string | null;
   project: string | null;
+  excluded?: boolean;
 }
 
 export interface CashSubsection {
