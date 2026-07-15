@@ -231,12 +231,24 @@ async def resync(slug: str, db: DbDep, _: CurrentUser, connection_id: int = Quer
     conn = await db.get(BankConnection, connection_id)
     if conn is None or not conn.token:
         raise HTTPException(400, "Нет подключения или токена")
+    res = await resync_core(db, slug, conn, date_from)
+    if res is None:
+        raise HTTPException(400, "Нет сопоставленных счетов")
+    return res
+
+
+async def resync_core(db, slug: str, conn, date_from: str | None = None) -> dict | None:
+    """Ядро синхронизации подключения (используется эндпойнтом и автосинхронизацией)."""
+    company_id = conn.company_id
+    connection_id = conn.id
+    if not conn.token:
+        return None
     maps = (await db.execute(select(BankAccountMap).where(
         BankAccountMap.connection_id == connection_id))).scalars().all()
     num_to_acc = {m.bank_account: m.account_id for m in maps if m.account_id}
     app_ids = set(num_to_acc.values())
     if not app_ids:
-        raise HTTPException(400, "Нет сопоставленных счетов")
+        return None
 
     # По умолчанию тянем всю доступную историю (данные Т-Бизнес доступны с июня 2023).
     d_from = date_from or "2015-01-01"

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DatePresets } from "./DatePresets";
 
 export interface Range {
   date_from: string;
@@ -17,6 +18,10 @@ export function RangePicker({ range, onChange }: { range: Range; onChange: (r: R
   const [local, setLocal] = useState(range);
   return (
     <div className="card flex flex-wrap items-end gap-3">
+      <div>
+        <label className="label">Быстрый период</label>
+        <DatePresets className="!w-44" onSelect={(from, to) => { const r = { date_from: from, date_to: to }; setLocal(r); onChange(r); }} />
+      </div>
       <div>
         <label className="label">С даты</label>
         <input type="date" className="input" value={local.date_from} onChange={(e) => setLocal({ ...local, date_from: e.target.value })} />

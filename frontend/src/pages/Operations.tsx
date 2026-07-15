@@ -6,6 +6,7 @@ import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useLegalEntities, useProjects } from "../api/hooks";
 import { ExportButton } from "../components/ExportButton";
 import { Modal } from "../components/Modal";
+import { DatePresets } from "../components/DatePresets";
 import type { Operation, OperationList, OperationType } from "../api/types";
 
 const TYPE_LABEL: Record<OperationType, string> = {
@@ -175,6 +176,7 @@ export function Operations() {
           </div>
           <div>
             <div className="label">Дата оплаты</div>
+            <DatePresets className="mb-1" onSelect={(from, to) => setFilters({ ...filters, date_from: from, date_to: to })} />
             <input type="date" className="input mb-1" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} />
             <input type="date" className="input" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} />
           </div>

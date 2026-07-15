@@ -1,4 +1,6 @@
 """Точка входа FastAPI-приложения «ПланФакт-аналог»."""
+import asyncio
+import contextlib
 import os
 
 from fastapi import FastAPI
@@ -9,7 +11,18 @@ from starlette.responses import FileResponse
 from app.api import auth, bank_oauth, banks, budgets, companies, deals, dictionaries, imports, imports_bank, integrations, operations, quickfilters, recurring, reports, rules, tbank
 from app.core.config import settings
 
-app = FastAPI(title="ПланФакт-аналог", version="0.1.0")
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Фоновая автосинхронизация банков по настройке частоты (daily/twice/manual)
+    from app.services.auto_sync import scheduler_loop
+    task = asyncio.create_task(scheduler_loop())
+    yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+app = FastAPI(title="ПланФакт-аналог", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

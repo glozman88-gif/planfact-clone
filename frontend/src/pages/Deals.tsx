@@ -5,6 +5,7 @@ import { api, downloadFile, money } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useCounterparties, useDealStatuses } from "../api/hooks";
 import { Modal } from "../components/Modal";
+import { DatePresets } from "../components/DatePresets";
 
 type Kind = "sale" | "purchase";
 const EMPTY_FILTERS = { status_id: "", counterparty_id: "", date_from: "", date_to: "", sum_from: "", sum_to: "", profit_from: "", profit_to: "" };
@@ -99,6 +100,7 @@ export function Deals() {
           </div>
           <div>
             <div className="label">Дата создания</div>
+            <DatePresets className="mb-1" onSelect={(from, to) => setFilters({ ...filters, date_from: from, date_to: to })} />
             <input type="date" className="input mb-1" value={filters.date_from} onChange={(e) => setF("date_from", e.target.value)} />
             <input type="date" className="input" value={filters.date_to} onChange={(e) => setF("date_to", e.target.value)} />
           </div>
