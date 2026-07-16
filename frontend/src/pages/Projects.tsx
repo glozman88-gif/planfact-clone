@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
@@ -10,11 +11,12 @@ export function Projects() {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [adding, setAdding] = useState(false);
+  const [method, setMethod] = useState<"cash" | "accrual">("cash");
 
   const list = useQuery({
-    queryKey: ["projects-calc", companyId],
+    queryKey: ["projects-calc", companyId, method],
     enabled: !!companyId,
-    queryFn: async () => (await api.get("/api/projects-calc", { params: { company_id: companyId } })).data as any[],
+    queryFn: async () => (await api.get("/api/projects-calc", { params: { company_id: companyId, method } })).data as any[],
   });
   const create = useMutation({
     mutationFn: (n: string) => api.post("/api/projects", { name: n }, { params: { company_id: companyId } }),
@@ -29,7 +31,17 @@ export function Projects() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Проекты</h1>
-        <button className="btn-primary" onClick={() => setAdding(true)}>+ Добавить</button>
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-md bg-slate-100 p-1 text-sm">
+            {(["accrual", "cash"] as const).map((m) => (
+              <button key={m} onClick={() => setMethod(m)}
+                className={`rounded px-3 py-1 ${method === m ? "bg-white font-medium text-brand-dark shadow-sm" : "text-slate-600"}`}>
+                {m === "accrual" ? "Начисление" : "Кассовый"}
+              </button>
+            ))}
+          </div>
+          <button className="btn-primary" onClick={() => setAdding(true)}>+ Добавить</button>
+        </div>
       </div>
       <div className="card overflow-x-auto">
         <table className="table whitespace-nowrap">
@@ -42,7 +54,9 @@ export function Projects() {
           <tbody>
             {list.data?.map((r) => (
               <tr key={r.id ?? "none"} className="hover:bg-slate-50">
-                <td className="font-medium">{r.name}</td>
+                <td className="font-medium">
+                  {r.id != null ? <Link className="text-brand hover:underline" to={`/projects/${r.id}`}>{r.name}</Link> : r.name}
+                </td>
                 <td className="text-right text-emerald-600">{fmtNum(r.income)}</td>
                 <td className="text-right text-red-600">{fmtNum(r.outcome)}</td>
                 <td className={`text-right font-medium ${Number(r.profit) < 0 ? "text-red-600" : ""}`}>{fmtNum(r.profit)}</td>

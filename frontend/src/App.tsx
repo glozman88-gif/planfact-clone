@@ -13,6 +13,7 @@ import { Budgets } from "./pages/Budgets";
 import { Accounts } from "./pages/Accounts";
 import { Categories } from "./pages/Categories";
 import { Projects } from "./pages/Projects";
+import { ProjectCard } from "./pages/ProjectCard";
 import { Counterparties } from "./pages/Counterparties";
 import { LegalEntities } from "./pages/LegalEntities";
 import { Deals } from "./pages/Deals";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="accounts" element={<Accounts />} />
         <Route path="categories" element={<Categories />} />
         <Route path="projects" element={<Projects />} />
+        <Route path="projects/:id" element={<ProjectCard />} />
         <Route path="counterparties" element={<Counterparties />} />
         <Route path="legal-entities" element={<LegalEntities />} />
         <Route path="products" element={<Products />} />
