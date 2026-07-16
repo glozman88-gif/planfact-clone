@@ -277,13 +277,14 @@ async def resync_core(db, slug: str, conn, date_from: str | None = None) -> dict
         r["project_id"] = None
     apply_rules(rows, await load_rules(db, company_id, "bank"))
 
-    # Существующие операции по этим счетам: индексы по (счёт, external_id) и подписи + движение.
-    # Ключ по СЧЁТУ+ID банка, а не по одному external_id: у разных счетов ID совпадают, и
-    # глобальный ключ приводил к дубликатам при повторной синхронизации.
+    # Существующие операции по этим счетам: индексы по external_id и подписи + текущее движение.
+    # Дедуп ведём ПО ПОДПИСИ (сумма/дата/тип/назначение), а не по (счёт, external_id): банк
+    # (и особенно песочница) переиспользует небольшие external_id для РАЗНЫХ операций в разные
+    # периоды, поэтому по ним нельзя отличать операции — иначе разные операции теряются.
     existing = (await db.execute(select(Operation).where(
         Operation.company_id == company_id,
         or_(Operation.account_id.in_(app_ids), Operation.to_account_id.in_(app_ids))))).scalars().all()
-    ext_map: dict[tuple, Operation] = {}
+    ext_map: dict[str, Operation] = {}
     sig_map: dict[tuple, Operation] = {}
     net: dict[int, Decimal] = {aid: Decimal("0") for aid in app_ids}
 
@@ -300,9 +301,11 @@ async def resync_core(db, slug: str, conn, date_from: str | None = None) -> dict
             if acc_id in net:
                 net[acc_id] -= amt
 
+    ext_count: dict[str, int] = {}
     for o in existing:
         if o.external_id:
-            ext_map[(o.account_id, o.external_id)] = o
+            ext_map[o.external_id] = o
+            ext_count[o.external_id] = ext_count.get(o.external_id, 0) + 1
         sig_map[_sig(o.account_id, o.to_account_id, o.op_date.isoformat(), o.amount, _optype(o.type), o.description)] = o
         add_net(o.account_id, o.to_account_id, _optype(o.type), Decimal(str(o.amount)))
 
@@ -318,27 +321,26 @@ async def resync_core(db, slug: str, conn, date_from: str | None = None) -> dict
         to_id = num_to_acc.get(r.get("to_account")) if r.get("to_account") else None
         ext = r.get("external_id")
         sig = _sig(acc_id, to_id, r["op_date"], amt, r["type"], r.get("description"))
-        # Уже загруженная операция: сперва по (счёт, ID банка) — устойчиво к тому, что банк или
-        # песочница отдаёт иные сумму/дату для того же ID (иначе плодятся дубликаты); затем
-        # запасным образом по подписи (для операций без external_id).
-        prior = ext_map.get((acc_id, ext)) if ext else None
-        if prior is None:
-            prior = sig_map.get(sig)
-        if prior is not None:
-            if ext and not prior.external_id:
-                prior.external_id = ext  # бэкфилл ID банка для будущих синхронизаций
-            if prior.counterparty_id is None and r.get("counterparty_id"):
-                prior.counterparty_id = r["counterparty_id"]  # бэкфилл контрагента
-            # расхождение суммы/даты по тому же ID — отметим конфликт (информационно), но не дублируем
-            prior_sig = _sig(prior.account_id, prior.to_account_id, prior.op_date.isoformat(),
-                             prior.amount, _optype(prior.type), prior.description)
-            if ext and prior_sig != sig:
-                conflicts.append({
-                    "op_id": prior.id, "external_id": ext,
-                    "reason": "Сумма или дата отличаются от загруженной ранее",
-                    "bank": {"amount": str(amt), "date": r["op_date"], "type": r["type"], "description": r.get("description")},
-                    "app": {"amount": str(prior.amount), "date": prior.op_date.isoformat()},
-                })
+        # 1) идентичность по подписи — уже загружена (с возможными ручными правками аналитики)
+        by_sig = sig_map.get(sig)
+        if by_sig is not None:
+            if ext and not by_sig.external_id:
+                by_sig.external_id = ext  # бэкфилл ID банка для будущих синхронизаций
+            # бэкфилл контрагента для ранее загруженных операций без него
+            if by_sig.counterparty_id is None and r.get("counterparty_id"):
+                by_sig.counterparty_id = r["counterparty_id"]
+            skipped += 1
+            continue
+        # 2) подпись не совпала, но банковский ID однозначно (единственный раз) указывает на
+        #    загруженную операцию → её изменили — конфликт, не грузим повторно
+        if ext and ext_count.get(ext) == 1 and ext in ext_map:
+            o = ext_map[ext]
+            conflicts.append({
+                "op_id": o.id, "external_id": ext,
+                "reason": "Сумма или дата отличаются от загруженной ранее",
+                "bank": {"amount": str(amt), "date": r["op_date"], "type": r["type"], "description": r.get("description")},
+                "app": {"amount": str(o.amount), "date": o.op_date.isoformat()},
+            })
             skipped += 1
             continue
         if sig in seen_new:
