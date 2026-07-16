@@ -81,8 +81,33 @@ async def payment_calendar(
     company_id: int = Query(...),
     date_from: date = Query(...),
     date_to: date = Query(...),
+    interval: str = "month",
+    account_id: int | None = None,
+    project_id: int | None = None,
+    legal_entity_id: int | None = None,
+    method: str = "cash",
 ):
-    return await rep.payment_calendar(db, company_id, date_from, date_to)
+    return await rep.payment_calendar(db, company_id, date_from, date_to, interval,
+                                      account_id, project_id, legal_entity_id, method)
+
+
+@router.get("/payment-calendar-export")
+async def payment_calendar_export(
+    db: DbDep,
+    _: CurrentUser,
+    company_id: int = Query(...),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    interval: str = "month",
+    account_id: int | None = None,
+    project_id: int | None = None,
+    legal_entity_id: int | None = None,
+    method: str = "cash",
+):
+    report = await rep.payment_calendar(db, company_id, date_from, date_to, interval,
+                                        account_id, project_id, legal_entity_id, method)
+    data = xlsx.payment_calendar_xlsx(report)
+    return xlsx_response(data, f"payment_calendar_{date_from.isoformat()}.xlsx")
 
 
 @router.get("/balance")

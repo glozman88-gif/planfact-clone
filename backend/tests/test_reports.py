@@ -146,6 +146,24 @@ async def test_plan_fact_bdr(session):
 
 
 @pytest.mark.asyncio
+async def test_payment_calendar_intervals(session):
+    company = await _setup(session)
+    # По месяцам: остаток 1000 → 1300 (янв) → 1600 (фев)
+    r = await rep.payment_calendar(session, company.id, date(2026, 1, 1), date(2026, 2, 28), interval="month")
+    assert r["interval"] == "month"
+    assert D(r["opening_balance"]) == D("1000")
+    by = {row["period"]: row for row in r["rows"]}
+    assert D(by["2026-01"]["closing"]) == D("1300")
+    assert D(by["2026-02"]["closing"]) == D("1600")
+    assert r["has_gap"] is False
+    # По дням: 31 корзина за январь, каждая с диапазоном start=end
+    rd = await rep.payment_calendar(session, company.id, date(2026, 1, 1), date(2026, 1, 31), interval="day")
+    assert len(rd["rows"]) == 31
+    assert rd["rows"][0]["start"] == rd["rows"][0]["end"] == "2026-01-01"
+    assert D(rd["rows"][-1]["closing"]) == D("1300")  # 1000 + 500 − 200
+
+
+@pytest.mark.asyncio
 async def test_plan_fact_bdds_balances(session):
     company = await _setup(session)
     b = await _make_budget(session, company, "bdds")

@@ -4,10 +4,10 @@
 компании (base_amount), с откатом на amount, если пересчёт не делался.
 """
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +32,55 @@ def month_range(date_from: date, date_to: date) -> list[str]:
             m = 1
             y += 1
     return keys
+
+
+def bucket_key(d: date, interval: str) -> str:
+    """Ключ корзины даты для платёжного календаря по интервалу."""
+    if interval == "day":
+        return d.isoformat()
+    if interval == "week":
+        return (d - timedelta(days=d.weekday())).isoformat()  # понедельник недели
+    if interval == "quarter":
+        return f"{d.year:04d}-Q{(d.month - 1) // 3 + 1}"
+    if interval == "year":
+        return f"{d.year:04d}"
+    return f"{d.year:04d}-{d.month:02d}"  # month
+
+
+def bucket_range(date_from: date, date_to: date, interval: str) -> list[tuple[str, date, date]]:
+    """Список корзин (ключ, начало, конец) от date_from до date_to по интервалу."""
+    out: list[tuple[str, date, date]] = []
+    if interval == "day":
+        d = date_from
+        while d <= date_to:
+            out.append((d.isoformat(), d, d))
+            d += timedelta(days=1)
+    elif interval == "week":
+        d = date_from - timedelta(days=date_from.weekday())
+        while d <= date_to:
+            out.append((d.isoformat(), d, d + timedelta(days=6)))
+            d += timedelta(days=7)
+    elif interval == "quarter":
+        y, q = date_from.year, (date_from.month - 1) // 3
+        end = (date_to.year, (date_to.month - 1) // 3)
+        while (y, q) <= end:
+            start = date(y, q * 3 + 1, 1)
+            em = q * 3 + 3
+            fin = date(y + 1, 1, 1) - timedelta(days=1) if em == 12 else date(y, em + 1, 1) - timedelta(days=1)
+            out.append((f"{y:04d}-Q{q + 1}", start, fin))
+            q += 1
+            if q > 3:
+                q = 0
+                y += 1
+    elif interval == "year":
+        for yy in range(date_from.year, date_to.year + 1):
+            out.append((f"{yy:04d}", date(yy, 1, 1), date(yy, 12, 31)))
+    else:  # month
+        for key in month_range(date_from, date_to):
+            y, m = int(key[:4]), int(key[5:7])
+            fin = date(y + 1, 1, 1) - timedelta(days=1) if m == 12 else date(y, m + 1, 1) - timedelta(days=1)
+            out.append((key, date(y, m, 1), fin))
+    return out
 
 
 def _amount(op: Operation) -> Decimal:
@@ -369,23 +418,25 @@ async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, da
     }
 
 
-async def _cash_before(db: AsyncSession, company_id: int, before: date) -> Decimal:
-    """Остаток денег на начало периода: сумма начальных остатков + факт. поток до даты."""
-    opening = (
-        await db.execute(select(Account.opening_balance).where(
-            Account.company_id == company_id, Account.is_undistributed.is_(False)))
-    ).scalars().all()
+async def _cash_before(db: AsyncSession, company_id: int, before: date,
+                       account_ids: set[int] | None = None) -> Decimal:
+    """Остаток денег на начало периода: сумма начальных остатков + факт. поток до даты.
+    account_ids — ограничить набором счетов (для фильтра платёжного календаря)."""
+    acc_q = select(Account.opening_balance).where(
+        Account.company_id == company_id, Account.is_undistributed.is_(False))
+    if account_ids is not None:
+        acc_q = acc_q.where(Account.id.in_(account_ids))
+    opening = (await db.execute(acc_q)).scalars().all()
     total = sum((Decimal(str(x)) for x in opening), ZERO)
-    ops = (
-        await db.execute(
-            select(Operation).where(
-                Operation.company_id == company_id,
-                Operation.op_date < before,
-                Operation.status == OperationStatus.committed,
-                Operation.type.in_([OperationType.income, OperationType.outcome]),
-            )
-        )
-    ).scalars().all()
+    conds = [
+        Operation.company_id == company_id,
+        Operation.op_date < before,
+        Operation.status == OperationStatus.committed,
+        Operation.type.in_([OperationType.income, OperationType.outcome]),
+    ]
+    if account_ids is not None:
+        conds.append(Operation.account_id.in_(account_ids))
+    ops = (await db.execute(select(Operation).where(*conds))).scalars().all()
     for op in ops:
         if op.type == OperationType.income:
             total += _amount(op)
@@ -911,63 +962,93 @@ async def pnl_category_operations(db: AsyncSession, company_id: int, category_id
     return rows
 
 
-async def payment_calendar(db: AsyncSession, company_id: int, date_from: date, date_to: date):
-    """Платёжный календарь: прогноз остатка по месяцам с учётом плановых и фактических
-    платежей; помечает кассовые разрывы (остаток на конец < 0).
+async def payment_calendar(db: AsyncSession, company_id: int, date_from: date, date_to: date,
+                           interval: str = "month", account_id: int | None = None,
+                           project_id: int | None = None, legal_entity_id: int | None = None,
+                           method: str = "cash"):
+    """Платёжный календарь: прогноз остатка по интервалам (день/неделя/месяц/квартал/год)
+    с учётом плановых и фактических платежей; помечает кассовые разрывы (остаток < 0)
+    и просроченные плановые операции.
 
-    План = подтверждённые + запланированные операции (касса, по дате оплаты).
+    План = подтверждённые + запланированные операции; факт = только подтверждённые.
+    method="accrual" — раскладка по дате начисления, иначе по дате оплаты.
+    Фильтры: счёт, проект, юрлицо (набор счетов юрлица).
     """
-    from app.models import Account
+    buckets = bucket_range(date_from, date_to, interval)
+    keys = [b[0] for b in buckets]
+    use_accrual = method == "accrual"
 
-    periods = month_range(date_from, date_to)
-    income = _empty_periods(periods)
-    outcome = _empty_periods(periods)
-    income_fact = _empty_periods(periods)
-    outcome_fact = _empty_periods(periods)
+    # набор счетов фильтра (юрлицо ∩ счёт)
+    account_ids: set[int] | None = None
+    if legal_entity_id:
+        account_ids = await _legal_entity_account_ids(db, company_id, legal_entity_id)
+    if account_id:
+        account_ids = {account_id} if account_ids is None else (account_ids & {account_id})
 
-    ops = (await db.execute(
-        select(Operation).where(
-            Operation.company_id == company_id,
-            Operation.type.in_([OperationType.income, OperationType.outcome]),
-            Operation.op_date >= date_from, Operation.op_date <= date_to,
-        )
-    )).scalars().all()
+    income = {k: ZERO for k in keys}
+    outcome = {k: ZERO for k in keys}
+    income_fact = {k: ZERO for k in keys}
+    outcome_fact = {k: ZERO for k in keys}
+
+    dcol = func.coalesce(Operation.accrual_date, Operation.op_date) if use_accrual else Operation.op_date
+    conds = [
+        Operation.company_id == company_id,
+        Operation.type.in_([OperationType.income, OperationType.outcome]),
+        dcol >= date_from, dcol <= date_to,
+    ]
+    if account_ids is not None:
+        conds.append(Operation.account_id.in_(account_ids))
+    if project_id:
+        conds.append(Operation.project_id == project_id)
+    ops = (await db.execute(select(Operation).where(*conds))).scalars().all()
+
+    today = date.today()
+    overdue_count = 0
+    overdue_amount = ZERO
     for op in ops:
-        mk = month_key(op.op_date)
-        if mk not in income:
+        d = (op.accrual_date or op.op_date) if use_accrual else op.op_date
+        k = bucket_key(d, interval)
+        if k not in income:
             continue
         committed = op.status == OperationStatus.committed
+        amt = _amount(op)
         if op.type == OperationType.income:
-            income[mk] += op.amount
+            income[k] += amt
             if committed:
-                income_fact[mk] += op.amount
+                income_fact[k] += amt
         else:
-            outcome[mk] += op.amount
+            outcome[k] += amt
             if committed:
-                outcome_fact[mk] += op.amount
+                outcome_fact[k] += amt
+        # просрочка: плановая операция с датой в прошлом
+        if not committed and d < today:
+            overdue_count += 1
+            overdue_amount += amt
 
-    # Остаток на начало = деньги на счетах до периода (только факт)
-    opening = await _cash_before(db, company_id, date_from)
+    opening = await _cash_before(db, company_id, date_from, account_ids)
     rows = []
     running = opening
-    for p in periods:
-        net = income[p] - outcome[p]
-        start = running
+    for key, start, end in buckets:
+        net = income[key] - outcome[key]
+        st = running
         running += net
         rows.append({
-            "period": p,
-            "income": str(income[p]), "outcome": str(outcome[p]),
-            "income_fact": str(income_fact[p]), "outcome_fact": str(outcome_fact[p]),
-            "net": str(net), "opening": str(start), "closing": str(running),
-            "gap": running < ZERO,
+            "period": key, "start": start.isoformat(), "end": end.isoformat(),
+            "income": str(income[key]), "outcome": str(outcome[key]),
+            "income_fact": str(income_fact[key]), "outcome_fact": str(outcome_fact[key]),
+            "net": str(net), "opening": str(st), "closing": str(running),
+            "gap": running < ZERO, "past": end < today,
         })
     return {
         "report": "payment_calendar",
-        "periods": periods,
+        "interval": interval,
+        "periods": keys,
         "opening_balance": str(opening),
         "closing_balance": str(running),
         "rows": rows,
         "has_gap": any(r["gap"] for r in rows),
+        "overdue_count": overdue_count,
+        "overdue_amount": str(overdue_amount),
     }
 
 

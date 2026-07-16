@@ -335,13 +335,17 @@ export interface PlanFactReport {
 
 export interface PaymentCalendar {
   report: "payment_calendar";
+  interval: string;
   periods: string[];
   opening_balance: string;
   closing_balance: string;
   has_gap: boolean;
+  overdue_count: number;
+  overdue_amount: string;
   rows: {
-    period: string; income: string; outcome: string; income_fact: string; outcome_fact: string;
-    net: string; opening: string; closing: string; gap: boolean;
+    period: string; start: string; end: string;
+    income: string; outcome: string; income_fact: string; outcome_fact: string;
+    net: string; opening: string; closing: string; gap: boolean; past: boolean;
   }[];
 }
 

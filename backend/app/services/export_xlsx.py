@@ -308,3 +308,33 @@ def budget_xlsx(report: dict, *, budget_name: str) -> bytes:
     ws.freeze_panes = "B4"
     _autosize(ws, {1: 34, **{2 + i: 14 for i in range(len(periods) * 2 + 3)}})
     return _save(wb)
+
+
+# ─────────────────────────── Платёжный календарь ───────────────────────────
+
+def payment_calendar_xlsx(report: dict) -> bytes:
+    """Платёжный календарь в Excel: показатели × периоды."""
+    rows = report["rows"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Платёжный календарь"
+    ws.cell(row=1, column=1, value="Платёжный календарь").font = BOLD
+
+    labels = [r["period"] for r in rows]
+    _header_row(ws, 3, ["Показатель", *labels])
+    plan = [
+        ("Остаток на начало", "opening"),
+        ("Поступления", "income"),
+        ("Выплаты", "outcome"),
+        ("Денежный поток", "net"),
+        ("Остаток на конец", "closing"),
+    ]
+    r = 4
+    for label, key in plan:
+        ws.cell(row=r, column=1, value=label).font = BOLD if key in ("net", "closing") else None
+        for i, row in enumerate(rows):
+            _money_cell(ws, r, 2 + i, row[key], bold=key in ("net", "closing"))
+        r += 1
+    ws.freeze_panes = "B4"
+    _autosize(ws, {1: 22, **{2 + i: 13 for i in range(len(rows))}})
+    return _save(wb)
