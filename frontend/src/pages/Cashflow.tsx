@@ -7,7 +7,8 @@ import { RangePicker, IntervalPicker, defaultRange, fmtNum, type Range } from ".
 import { ExportButton } from "../components/ExportButton";
 import { SearchSelect } from "../components/SearchSelect";
 import { Sparkline } from "../components/Sparkline";
-import type { CashflowReport } from "../api/types";
+import { Modal } from "../components/Modal";
+import type { CashflowReport, Operation, OperationList } from "../api/types";
 
 const vals = (m: Record<string, string>, periods: string[]) => periods.map((p) => Number(m[p] || 0));
 
@@ -19,6 +20,7 @@ export function Cashflow() {
   const [interval, setInterval_] = useState("month");
   const [counterpartyId, setCounterpartyId] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [drill, setDrill] = useState<{ categoryId: number | null; side: "income" | "outcome"; name: string } | null>(null);
   const legalEntities = useLegalEntities();
   const accounts = useAccounts();
   const parties = useCounterparties();
@@ -103,7 +105,8 @@ export function Cashflow() {
             <tbody>
               <Row label="Остаток на начало" periods={r.periods} values={r.opening_by_period} bg="bg-slate-50" bold />
               {r.activities.map((a) => (
-                <ActivityBlock key={a.key} a={a} periods={r.periods} />
+                <ActivityBlock key={a.key} a={a} periods={r.periods}
+                  onDrill={(categoryId, side, name) => setDrill({ categoryId, side, name })} />
               ))}
               <Section title="Перемещения" color="text-slate-700">
                 <Row label="Списания" periods={r.periods} values={r.moves.writeoff_by_period} indent />
@@ -115,21 +118,32 @@ export function Cashflow() {
           </table>
         </div>
       )}
+
+      {drill && (
+        <CashflowDrill companyId={companyId!} drill={drill} range={range}
+          params={{ legal_entity_id: legalEntityId, counterparty_id: counterpartyId, account_id: accountId }}
+          onClose={() => setDrill(null)} />
+      )}
     </div>
   );
 }
 
-function ActivityBlock({ a, periods }: { a: CashflowReport["activities"][0]; periods: string[] }) {
+function ActivityBlock({ a, periods, onDrill }: {
+  a: CashflowReport["activities"][0]; periods: string[];
+  onDrill: (categoryId: number | null, side: "income" | "outcome", name: string) => void;
+}) {
   return (
     <>
       <Row label={a.title} periods={periods} values={a.net_by_period} total={a.net_total} bold bg="bg-slate-50" />
       <Row label="Поступления" periods={periods} values={a.income.by_period} total={a.income.total} indent className="font-medium text-emerald-700" />
       {a.income.categories.map((c) => (
-        <Row key={"i" + c.category_id} label={c.name} periods={periods} values={c.by_period} total={c.total} indent2 muted />
+        <Row key={"i" + c.category_id} label={c.name} periods={periods} values={c.by_period} total={c.total} indent2 muted
+          onClick={() => onDrill(c.category_id, "income", c.name)} />
       ))}
       <Row label="Выплаты" periods={periods} values={a.outcome.by_period} total={a.outcome.total} indent className="font-medium text-red-700" />
       {a.outcome.categories.map((c) => (
-        <Row key={"o" + c.category_id} label={c.name} periods={periods} values={c.by_period} total={c.total} indent2 muted />
+        <Row key={"o" + c.category_id} label={c.name} periods={periods} values={c.by_period} total={c.total} indent2 muted
+          onClick={() => onDrill(c.category_id, "outcome", c.name)} />
       ))}
     </>
   );
@@ -147,21 +161,63 @@ function Section({ title, color, children }: { title: string; color: string; chi
 }
 
 function Row({
-  label, periods, values, total, bold, indent, indent2, muted, bg, className,
+  label, periods, values, total, bold, indent, indent2, muted, bg, className, onClick,
 }: {
   label: string; periods: string[]; values: Record<string, string>; total?: string;
-  bold?: boolean; indent?: boolean; indent2?: boolean; muted?: boolean; bg?: string; className?: string;
+  bold?: boolean; indent?: boolean; indent2?: boolean; muted?: boolean; bg?: string; className?: string; onClick?: () => void;
 }) {
   const series = vals(values, periods);
   const sum = total !== undefined ? Number(total) : series.reduce((s, v) => s + v, 0);
   return (
     <tr className={`${bold ? "font-semibold" : ""} ${bg ?? ""} ${className ?? ""}`}>
       <td className={`sticky left-0 ${bg ?? "bg-white"} ${indent ? "pl-6" : ""} ${indent2 ? "pl-10" : ""} ${muted ? "text-slate-500" : ""}`}>
-        {label}
+        {onClick ? <button className="text-left hover:text-brand hover:underline" title="Показать операции" onClick={onClick}>{label}</button> : label}
       </td>
       <td className="py-0 text-center"><Sparkline values={series} /></td>
       {periods.map((p) => <td key={p} className={`text-right ${muted ? "text-slate-500" : ""}`}>{fmtNum(values[p])}</td>)}
       <td className="text-right">{fmtNum(String(sum))}</td>
     </tr>
+  );
+}
+
+// Drill-down: операции статьи ДДС за период отчёта.
+function CashflowDrill({ companyId, drill, range, params, onClose }: {
+  companyId: number; drill: { categoryId: number | null; side: "income" | "outcome"; name: string };
+  range: Range; params: { legal_entity_id: string; counterparty_id: string; account_id: string }; onClose: () => void;
+}) {
+  const parties = useCounterparties();
+  const partyName = (id?: number | null) => parties.data?.find((p) => p.id === id)?.name;
+  const q = useQuery({
+    queryKey: ["cf-drill", companyId, drill, range, params],
+    queryFn: async () => (await api.get<OperationList>("/api/operations", {
+      params: {
+        company_id: companyId, date_from: range.date_from, date_to: range.date_to, types: drill.side,
+        ...(drill.categoryId != null ? { category_id: drill.categoryId } : {}),
+        legal_entity_id: params.legal_entity_id || undefined,
+        counterparty_id: params.counterparty_id || undefined,
+        account_id: params.account_id || undefined, limit: 500,
+      },
+    })).data,
+  });
+  const items = q.data?.items ?? [];
+  return (
+    <Modal title={`${drill.side === "income" ? "Поступления" : "Выплаты"} · ${drill.name}`} onClose={onClose} wide>
+      {q.isLoading ? <p className="py-6 text-center text-slate-400">Загрузка…</p>
+        : items.length === 0 ? <p className="py-6 text-center text-slate-400">Нет операций.</p>
+        : (
+          <table className="table text-sm">
+            <thead><tr><th>Дата</th><th>Контрагент / описание</th><th className="text-right">Сумма</th></tr></thead>
+            <tbody>
+              {items.map((o: Operation) => (
+                <tr key={o.id}>
+                  <td className="whitespace-nowrap">{o.op_date}</td>
+                  <td>{partyName(o.counterparty_id) || o.description || "—"}</td>
+                  <td className="text-right tabular-nums">{fmtNum(o.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </Modal>
   );
 }

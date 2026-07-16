@@ -285,6 +285,8 @@ export function Operations() {
                   <td className={`whitespace-nowrap text-right font-medium ${TYPE_COLOR[op.type]}`}>{op.type === "outcome" ? "−" : op.type === "income" ? "+" : ""}{money(op.amount, op.currency_code)}</td>
                   <td className="whitespace-nowrap text-right">
                     <button className="text-brand hover:underline" onClick={() => setEditing(op)}>ред.</button>
+                    <button className="ml-2 text-slate-500 hover:underline" title="Создать копию операции"
+                      onClick={() => setEditing({ ...op, id: undefined, op_date: today(), accrual_date: undefined, bound_move_operation_id: undefined })}>копия</button>
                     <button className="ml-2 text-red-500 hover:underline" onClick={() => confirm("Удалить операцию?") && remove.mutate(op.id)}>×</button>
                   </td>
                 </tr>
