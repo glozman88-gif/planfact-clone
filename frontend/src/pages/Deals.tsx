@@ -6,6 +6,7 @@ import { useApp } from "../context/AppContext";
 import { useCounterparties, useDealStatuses } from "../api/hooks";
 import { Modal } from "../components/Modal";
 import { DatePresets } from "../components/DatePresets";
+import { SearchSelect } from "../components/SearchSelect";
 
 type Kind = "sale" | "purchase";
 const EMPTY_FILTERS = { status_id: "", counterparty_id: "", date_from: "", date_to: "", sum_from: "", sum_to: "", profit_from: "", profit_to: "" };
@@ -86,17 +87,11 @@ export function Deals() {
           </div>
           <div>
             <div className="label">Статус сделки</div>
-            <select className="input" value={filters.status_id} onChange={(e) => setF("status_id", e.target.value)}>
-              <option value="">Все</option>
-              {statuses.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <SearchSelect value={filters.status_id} onChange={(v) => setF("status_id", v)} options={statuses.data ?? []} emptyLabel="Все" placeholder="Все" />
           </div>
           <div>
             <div className="label">{isSale ? "Клиенты" : "Поставщики"}</div>
-            <select className="input" value={filters.counterparty_id} onChange={(e) => setF("counterparty_id", e.target.value)}>
-              <option value="">Все</option>
-              {parties.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <SearchSelect value={filters.counterparty_id} onChange={(v) => setF("counterparty_id", v)} options={parties.data ?? []} emptyLabel="Все" placeholder="Все" />
           </div>
           <div>
             <div className="label">Дата создания</div>
@@ -229,16 +224,10 @@ function DealsBulkEdit({ count, statuses, parties, isSale, onClose, onSave }: an
       <form onSubmit={submit} className="space-y-3">
         <p className="text-sm text-slate-500">Отметьте поля, которые изменить у выбранных сделок.</p>
         <RowF k="status_id" label="Статус">
-          <select className="input" disabled={!on.status_id} value={v.status_id ?? ""} onChange={(e) => setV({ ...v, status_id: e.target.value })}>
-            <option value="">— без статуса —</option>
-            {statuses.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <SearchSelect disabled={!on.status_id} value={v.status_id} onChange={(val) => setV({ ...v, status_id: val })} options={statuses} emptyLabel="— без статуса —" placeholder="— без статуса —" />
         </RowF>
         <RowF k="counterparty_id" label={isSale ? "Клиент" : "Поставщик"}>
-          <select className="input" disabled={!on.counterparty_id} value={v.counterparty_id ?? ""} onChange={(e) => setV({ ...v, counterparty_id: e.target.value })}>
-            <option value="">— не выбран —</option>
-            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <SearchSelect disabled={!on.counterparty_id} value={v.counterparty_id} onChange={(val) => setV({ ...v, counterparty_id: val })} options={parties} emptyLabel="— не выбран —" placeholder="— не выбран —" />
         </RowF>
         <RowF k="closed" label="Статус закрытия">
           <label className="flex items-center gap-1 text-sm"><input type="checkbox" disabled={!on.closed} checked={!!v.closed} onChange={(e) => setV({ ...v, closed: e.target.checked })} /> Закрыта</label>
@@ -273,10 +262,8 @@ function AddDeal({ kind, onClose, onSave, parties }: any) {
         {field("Дата сделки",
           <input type="date" className="input" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} />)}
         {field(isSale ? "Клиент" : "Поставщик",
-          <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
-            <option value="">{isSale ? "Укажите, кому продаёте товар или услугу" : "Укажите, у кого покупаете"}</option>
-            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>)}
+          <SearchSelect value={f.counterparty_id} onChange={(val) => set("counterparty_id", val)} options={parties}
+            placeholder={isSale ? "Укажите, кому продаёте товар или услугу" : "Укажите, у кого покупаете"} />)}
         {field("НДС",
           <select className="input" value={f.vat_mode} onChange={(e) => set("vat_mode", e.target.value)}>
             <option value="with_vat">С учётом НДС</option>

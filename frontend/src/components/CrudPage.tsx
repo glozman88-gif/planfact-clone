@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useCrud } from "../api/hooks";
 import { Modal } from "./Modal";
+import { SearchSelect } from "./SearchSelect";
 
 export interface Field {
   name: string;
@@ -148,10 +149,8 @@ function BulkEditForm({ title, fields, count, onClose, onSave }: any) {
             <input type="checkbox" checked={!!on[f.name]} onChange={(e) => setOn({ ...on, [f.name]: e.target.checked })} />
             <span className="w-40 text-sm">{f.label}</span>
             {f.type === "select" ? (
-              <select className="input" disabled={!on[f.name]} value={val[f.name] ?? ""} onChange={(e) => setVal({ ...val, [f.name]: e.target.value })}>
-                <option value="">—</option>
-                {f.options?.map((o) => <option key={String(o.value)} value={o.value}>{o.label}</option>)}
-              </select>
+              <SearchSelect disabled={!on[f.name]} value={val[f.name]} onChange={(v) => setVal({ ...val, [f.name]: v })}
+                options={(f.options ?? []).map((o) => ({ id: o.value as any, name: o.label }))} />
             ) : f.type === "checkbox" ? (
               <input type="checkbox" disabled={!on[f.name]} checked={!!val[f.name]} onChange={(e) => setVal({ ...val, [f.name]: e.target.checked })} />
             ) : (
@@ -182,10 +181,8 @@ function CrudForm({ title, fields, initial, onClose, onSave }: any) {
           <div key={f.name}>
             {f.type !== "checkbox" && <label className="label">{f.label}</label>}
             {f.type === "select" ? (
-              <select className="input" value={form[f.name] ?? ""} onChange={(e) => set(f.name, e.target.value)}>
-                <option value="">—</option>
-                {f.options?.map((o) => <option key={String(o.value)} value={o.value}>{o.label}</option>)}
-              </select>
+              <SearchSelect value={form[f.name]} onChange={(v) => set(f.name, v)}
+                options={(f.options ?? []).map((o) => ({ id: o.value as any, name: o.label }))} />
             ) : f.type === "checkbox" ? (
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={!!form[f.name]} onChange={(e) => set(f.name, e.target.checked)} />

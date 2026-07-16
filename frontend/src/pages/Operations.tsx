@@ -7,6 +7,7 @@ import { useAccounts, useCategories, useCounterparties, useLegalEntities, usePro
 import { ExportButton } from "../components/ExportButton";
 import { Modal } from "../components/Modal";
 import { DatePresets } from "../components/DatePresets";
+import { SearchSelect } from "../components/SearchSelect";
 import type { Operation, OperationList, OperationType } from "../api/types";
 
 const TYPE_LABEL: Record<OperationType, string> = {
@@ -341,10 +342,7 @@ function Sel({ label, value, onChange, options }: { label: string; value: string
   return (
     <div>
       <div className="label">{label}</div>
-      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Все</option>
-        {options?.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-      </select>
+      <SearchSelect value={value} onChange={onChange} options={options ?? []} emptyLabel="Все" placeholder="Все" />
     </div>
   );
 }
@@ -518,14 +516,10 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
                   <div key={idx} className="flex items-center gap-2">
                     <input type="number" step="0.01" placeholder="Сумма" className="input w-28" value={it.amount}
                       onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, amount: e.target.value } : x))} />
-                    <select className="input" value={it.category_id ?? ""} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, category_id: e.target.value } : x))}>
-                      <option value="">Статья…</option>
-                      {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                    <select className="input" value={it.project_id ?? ""} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, project_id: e.target.value } : x))}>
-                      <option value="">Проект…</option>
-                      {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                    <SearchSelect className="w-full" value={it.category_id} placeholder="Статья…" options={categories}
+                      onChange={(val) => setItems(items.map((x, i) => i === idx ? { ...x, category_id: val } : x))} />
+                    <SearchSelect className="w-full" value={it.project_id} placeholder="Проект…" options={projects}
+                      onChange={(val) => setItems(items.map((x, i) => i === idx ? { ...x, project_id: val } : x))} />
                     <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-500" title="Не учитывать эту часть в доходах/расходах (ОПиУ)">
                       <input type="checkbox" checked={!!it.excluded} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, excluded: e.target.checked } : x))} /> не учит.
                     </label>
@@ -562,12 +556,7 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
 }
 
 function Opt({ v, on, list }: { v: any; on: (v: string) => void; list: any[] }) {
-  return (
-    <select className="input" value={v ?? ""} onChange={(e) => on(e.target.value)}>
-      <option value="">—</option>
-      {list.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-    </select>
-  );
+  return <SearchSelect value={v} onChange={on} options={list} />;
 }
 
 function BulkEditModal({ count, onClose, onSave, accounts, categories, projects, parties, error, pending }: any) {

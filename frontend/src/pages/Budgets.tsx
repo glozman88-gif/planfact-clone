@@ -5,6 +5,7 @@ import { useApp } from "../context/AppContext";
 import { useCategories, useProjects } from "../api/hooks";
 import { fmtNum } from "../components/ReportControls";
 import { ExportButton } from "../components/ExportButton";
+import { SearchSelect } from "../components/SearchSelect";
 import { Modal } from "../components/Modal";
 import type { Budget, Category, PlanFactReport } from "../api/types";
 
@@ -527,10 +528,8 @@ function NewBudgetModal({ mode, onClose, onCreate }: { mode: "bdr" | "bdds"; onC
         </div>
         <div>
           <label className="label">Проект (необязательно)</label>
-          <select className="input" value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
-            <option value="">Весь бизнес</option>
-            {projects.data?.filter((p) => !p.is_archived).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <SearchSelect value={form.project_id} onChange={(val) => setForm({ ...form, project_id: val })}
+            options={(projects.data ?? []).filter((p) => !p.is_archived)} emptyLabel="Весь бизнес" placeholder="Весь бизнес" />
         </div>
         {mode === "bdr" && (
           <div>

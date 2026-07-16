@@ -8,6 +8,7 @@ import { useApp } from "../context/AppContext";
 import { fmtNum } from "../components/ReportControls";
 import { DatePresets } from "../components/DatePresets";
 import { ExportButton } from "../components/ExportButton";
+import { SearchSelect } from "../components/SearchSelect";
 import { Modal } from "../components/Modal";
 import { useAccounts, useCounterparties, useLegalEntities, useProjects } from "../api/hooks";
 import type { PaymentCalendar as PC, Operation, OperationList } from "../api/types";
@@ -88,25 +89,16 @@ export function PaymentCalendar() {
         </div>
         <div>
           <label className="label">Счёт</label>
-          <select className="input !w-44" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-            <option value="">Все счета</option>
-            {accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <SearchSelect className="!w-44" value={accountId} onChange={setAccountId} options={accounts.data ?? []} emptyLabel="Все счета" placeholder="Все счета" />
         </div>
         <div>
           <label className="label">Проект</label>
-          <select className="input !w-40" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-            <option value="">Все проекты</option>
-            {projects.data?.filter((p) => !p.is_archived).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <SearchSelect className="!w-40" value={projectId} onChange={setProjectId} options={(projects.data ?? []).filter((p) => !p.is_archived)} emptyLabel="Все проекты" placeholder="Все проекты" />
         </div>
         {(legalEntities.data?.length ?? 0) > 0 && (
           <div>
             <label className="label">Юрлицо</label>
-            <select className="input !w-40" value={legalEntityId} onChange={(e) => setLegalEntityId(e.target.value)}>
-              <option value="">Все юрлица</option>
-              {legalEntities.data?.map((le) => <option key={le.id} value={le.id}>{le.name}</option>)}
-            </select>
+            <SearchSelect className="!w-40" value={legalEntityId} onChange={setLegalEntityId} options={legalEntities.data ?? []} emptyLabel="Все юрлица" placeholder="Все юрлица" />
           </div>
         )}
         <div>

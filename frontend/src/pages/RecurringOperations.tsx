@@ -4,6 +4,7 @@ import { api, money } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useProjects } from "../api/hooks";
 import { Modal } from "../components/Modal";
+import { SearchSelect } from "../components/SearchSelect";
 
 interface Recurring {
   id: number; company_id: number; name: string; active: boolean;
@@ -151,10 +152,7 @@ function RecurringModal({ tpl, onClose, onSave, accounts, categories, projects, 
   }
 
   const Opt = ({ v, on, list }: any) => (
-    <select className="input" value={v ?? ""} onChange={(e) => on(e.target.value)}>
-      <option value="">—</option>
-      {list.map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
-    </select>
+    <SearchSelect value={v} onChange={on} options={list ?? []} />
   );
 
   return (

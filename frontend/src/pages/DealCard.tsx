@@ -6,6 +6,7 @@ import type { Product } from "../api/types";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useDealStatuses, useLegalEntities, useProducts, useProjects } from "../api/hooks";
 import { Modal } from "../components/Modal";
+import { SearchSelect } from "../components/SearchSelect";
 import { OperationModal } from "./Operations";
 import type { Operation } from "../api/types";
 
@@ -311,10 +312,7 @@ function EditDealModal({ deal, parties, isSale, onClose, onSave }: any) {
             </select></div>
         </div>
         <div><label className="label">{isSale ? "Клиент" : "Поставщик"}</label>
-          <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
-            <option value="">— не выбран —</option>
-            {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select></div>
+          <SearchSelect value={f.counterparty_id} onChange={(val) => set("counterparty_id", val)} options={parties} emptyLabel="— не выбран —" placeholder="— не выбран —" /></div>
         <div><label className="label">Комментарий</label><textarea className="input" rows={2} value={f.note} onChange={(e) => set("note", e.target.value)} /></div>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn-ghost" onClick={onClose}>Отменить</button>
@@ -703,17 +701,11 @@ function InvoiceModal({ dealId, companyId, counterpartyId, products, entities, p
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="label">Ваша компания (юрлицо)</label>
-            <select className="input" value={f.legal_entity_id} onChange={(e) => set("legal_entity_id", e.target.value)}>
-              <option value="">— выберите юрлицо —</option>
-              {entities.map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
+            <SearchSelect value={f.legal_entity_id} onChange={(val) => set("legal_entity_id", val)} options={entities} emptyLabel="— выберите юрлицо —" placeholder="— выберите юрлицо —" />
             {entities.length === 0 && <p className="mt-1 text-xs text-amber-600">Добавьте юрлицо с реквизитами в «Справочники → Юридические лица».</p>}
           </div>
           <div><label className="label">Клиент</label>
-            <select className="input" value={f.counterparty_id} onChange={(e) => set("counterparty_id", e.target.value)}>
-              <option value="">— не выбран —</option>
-              {parties.map((x: any) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
+            <SearchSelect value={f.counterparty_id} onChange={(val) => set("counterparty_id", val)} options={parties} emptyLabel="— не выбран —" placeholder="— не выбран —" />
           </div>
         </div>
 

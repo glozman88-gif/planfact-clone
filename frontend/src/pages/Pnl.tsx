@@ -5,6 +5,7 @@ import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useLegalEntities, useProjects } from "../api/hooks";
 import { RangePicker, defaultRange, fmtNum, type Range } from "../components/ReportControls";
 import { ExportButton } from "../components/ExportButton";
+import { SearchSelect } from "../components/SearchSelect";
 import { Sparkline } from "../components/Sparkline";
 import { OperationModal } from "./Operations";
 import type { PnlReport, ReportSection, ReportCategory, PnlOperation, Operation } from "../api/types";
@@ -86,10 +87,8 @@ export function Pnl() {
           С исключёнными
         </label>
         {(legalEntities.data?.length ?? 0) > 0 && (
-          <select className="input !w-48" value={legalEntityId} onChange={(e) => setLegalEntityId(e.target.value)}>
-            <option value="">Все юрлица</option>
-            {legalEntities.data?.map((le) => <option key={le.id} value={le.id}>{le.name}</option>)}
-          </select>
+          <SearchSelect className="!w-48" value={legalEntityId} onChange={setLegalEntityId}
+            options={legalEntities.data ?? []} emptyLabel="Все юрлица" placeholder="Все юрлица" />
         )}
         <div className="ml-auto">
           <ExportButton
