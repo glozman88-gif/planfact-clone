@@ -263,3 +263,48 @@ def operations_xlsx(rows: list[dict]) -> bytes:
     ws.freeze_panes = "A2"
     _autosize(ws, {1: 12, 2: 14, 3: 13, 4: 10, 5: 18, 6: 18, 7: 22, 8: 22, 9: 16, 10: 16, 11: 16, 12: 8, 13: 30})
     return _save(wb)
+
+
+# ─────────────────────────── Бюджет (План-Факт) ───────────────────────────
+
+def budget_xlsx(report: dict, *, budget_name: str) -> bytes:
+    """Бюджет (БДР/БДДС) в Excel: по статьям × месяцам, План/Факт/Отклонение."""
+    periods = report["periods"]
+    is_bdr = (report.get("budget_method") or "bdr") == "bdr"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "БДР" if is_bdr else "БДДС"
+    kind_ru = "Бюджет доходов и расходов" if is_bdr else "Бюджет движения денег"
+    ws.cell(row=1, column=1, value=f"{kind_ru} · {budget_name}").font = BOLD
+
+    # Заголовок: Статья | <период> план | <период> факт | ... | Итого план | Итого факт | Отклонение
+    labels = ["Статья"]
+    for p in periods:
+        labels += [f"{p} план", f"{p} факт"]
+    labels += ["Итого план", "Итого факт", "Отклонение"]
+    hr = 3
+    _header_row(ws, hr, labels)
+    r = hr + 1
+
+    def _row(name, plan_bp, fact_bp, indent=0, bold=False):
+        nonlocal r
+        c = ws.cell(row=r, column=1, value=("    " * indent) + name)
+        if bold:
+            c.font = BOLD
+        col = 2
+        p_tot = f_tot = 0.0
+        for p in periods:
+            pv, fv = plan_bp.get(p, 0), fact_bp.get(p, 0)
+            _money_cell(ws, r, col, pv, bold=bold); _money_cell(ws, r, col + 1, fv, bold=bold)
+            p_tot += _num(pv); f_tot += _num(fv); col += 2
+        _money_cell(ws, r, col, p_tot, bold=True)
+        _money_cell(ws, r, col + 1, f_tot, bold=True)
+        _money_cell(ws, r, col + 2, f_tot - p_tot, bold=True)
+        r += 1
+
+    for row in report["rows"]:
+        _row(row["name"], row["plan_by_period"], row["fact_by_period"])
+
+    ws.freeze_panes = "B4"
+    _autosize(ws, {1: 34, **{2 + i: 14 for i in range(len(periods) * 2 + 3)}})
+    return _save(wb)

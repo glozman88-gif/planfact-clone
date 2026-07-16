@@ -1053,6 +1053,41 @@ async def plan_fact_report(db: AsyncSession, company_id: int, budget_id: int):
                 "deviation": str(fact_total - plan_total),
             }
         )
+
+    # Остатки для БДДС: фактический остаток на начало/конец периода — накопительно от
+    # денег на счетах до бюджета плюс фактический денежный поток (см. help/13759).
+    # Плановый остаток считается на фронте вживую при вводе плана (cash_before + план-поток).
+    balances = None
+    if not is_bdr:
+        # для проектного БДДС начальные остатки счетов не учитываются
+        cash_before = ZERO if budget.project_id else await _cash_before(db, company_id, budget.date_from)
+        flow_conds = [
+            Operation.company_id == company_id,
+            Operation.op_date >= budget.date_from,
+            Operation.op_date <= budget.date_to,
+            Operation.status == OperationStatus.committed,
+            Operation.type.in_([OperationType.income, OperationType.outcome]),
+        ]
+        if budget.project_id:
+            flow_conds.append(Operation.project_id == budget.project_id)
+        flow_ops = (await db.execute(select(Operation).where(*flow_conds))).scalars().all()
+        fact_net = _empty_periods(periods)
+        for op in flow_ops:
+            mk = month_key(op.op_date)
+            if mk in fact_net:
+                fact_net[mk] += op.amount if op.type == OperationType.income else -op.amount
+        opening_fact, closing_fact = {}, {}
+        run = cash_before
+        for p in periods:
+            opening_fact[p] = run
+            run += fact_net[p]
+            closing_fact[p] = run
+        balances = {
+            "cash_before": str(cash_before),
+            "opening_fact_by_period": {p: str(opening_fact[p]) for p in periods},
+            "closing_fact_by_period": {p: str(closing_fact[p]) for p in periods},
+        }
+
     return {
         "report": "plan_fact",
         "budget_id": budget.id,
@@ -1061,4 +1096,5 @@ async def plan_fact_report(db: AsyncSession, company_id: int, budget_id: int):
         "accrual_basis": budget.accrual_basis or "cash",
         "periods": periods,
         "rows": rows,
+        "balances": balances,
     }

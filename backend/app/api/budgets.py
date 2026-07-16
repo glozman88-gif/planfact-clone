@@ -1,13 +1,17 @@
 """Бюджеты с плановыми строками (для план-факта)."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbDep
 from app.models import Budget, BudgetItem
 from app.schemas.entities import BudgetIn, BudgetOut
+from app.services import export_xlsx as xlsx
+from app.services import reports as rep
 
 router = APIRouter(prefix="/api/budgets", tags=["budgets"])
+
+XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("", response_model=list[BudgetOut])
@@ -61,3 +65,16 @@ async def delete_budget(budget_id: int, db: DbDep, _: CurrentUser):
         raise HTTPException(404, "Бюджет не найден")
     await db.delete(budget)
     await db.commit()
+
+
+@router.get("/{budget_id}/export")
+async def export_budget(budget_id: int, db: DbDep, _: CurrentUser, company_id: int = Query(...)):
+    """Экспорт бюджета (план-факт по статьям × месяцам) в .xlsx."""
+    budget = await db.get(Budget, budget_id)
+    if budget is None:
+        raise HTTPException(404, "Бюджет не найден")
+    report = await rep.plan_fact_report(db, company_id, budget_id)
+    data = xlsx.budget_xlsx(report, budget_name=budget.name)
+    filename = f"budget_{budget_id}.xlsx"
+    return Response(content=data, media_type=XLSX_MEDIA,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})

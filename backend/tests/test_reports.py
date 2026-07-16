@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.db import Base
-from app.models import Account, Category, Company, Operation
+from app.models import Account, Budget, BudgetItem, Category, Company, Operation
 from app.models.enums import CategoryKind, OperationStatus, OperationType
 from app.services import reports as rep
 
@@ -111,3 +111,51 @@ async def test_pnl_include_excluded_toggle(session):
                                  include_excluded=True)
     assert D(withx["profit_total"]) == D("1600")
     assert D(withx["profit_by_period"]["2026-01"]) == D("1300")
+
+
+async def _make_budget(s: AsyncSession, company, method: str):
+    """Бюджет 2026-01..02 с планом: Выручка 400/400, Аренда 150/0."""
+    rev = (await s.execute(select(Category).where(Category.name == "Выручка"))).scalar_one()
+    rent = (await s.execute(select(Category).where(Category.name == "Аренда"))).scalar_one()
+    b = Budget(company_id=company.id, name="Б", date_from=date(2026, 1, 1), date_to=date(2026, 2, 28),
+               budget_method=method, accrual_basis="cash")
+    b.items = [
+        BudgetItem(category_id=rev.id, period=date(2026, 1, 1), amount=Decimal("400")),
+        BudgetItem(category_id=rev.id, period=date(2026, 2, 1), amount=Decimal("400")),
+        BudgetItem(category_id=rent.id, period=date(2026, 1, 1), amount=Decimal("150")),
+    ]
+    s.add(b)
+    await s.commit()
+    await s.refresh(b)
+    return b
+
+
+@pytest.mark.asyncio
+async def test_plan_fact_bdr(session):
+    company = await _setup(session)
+    b = await _make_budget(session, company, "bdr")
+    r = await rep.plan_fact_report(session, company.id, b.id)
+    assert r["budget_method"] == "bdr"
+    assert r["balances"] is None  # остатки только у БДДС
+    by_name = {row["name"]: row for row in r["rows"]}
+    # факт: Выручка 500 (янв) + 300 (фев); план 400/400
+    assert D(by_name["Выручка"]["fact_by_period"]["2026-01"]) == D("500")
+    assert D(by_name["Выручка"]["fact_by_period"]["2026-02"]) == D("300")
+    assert D(by_name["Выручка"]["plan_by_period"]["2026-01"]) == D("400")
+    assert D(by_name["Аренда"]["fact_by_period"]["2026-01"]) == D("200")
+
+
+@pytest.mark.asyncio
+async def test_plan_fact_bdds_balances(session):
+    company = await _setup(session)
+    b = await _make_budget(session, company, "bdds")
+    r = await rep.plan_fact_report(session, company.id, b.id)
+    assert r["budget_method"] == "bdds"
+    bal = r["balances"]
+    assert bal is not None
+    # остаток на начало = деньги на счетах до периода = 1000
+    assert D(bal["cash_before"]) == D("1000")
+    # факт-поток: янв +300 → конец 1300; фев +300 → конец 1600
+    assert D(bal["opening_fact_by_period"]["2026-01"]) == D("1000")
+    assert D(bal["closing_fact_by_period"]["2026-01"]) == D("1300")
+    assert D(bal["closing_fact_by_period"]["2026-02"]) == D("1600")

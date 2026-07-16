@@ -187,6 +187,8 @@ export interface Budget {
   project_id?: number | null;
   date_from: string;
   date_to: string;
+  budget_method: "bdr" | "bdds";
+  accrual_basis: "cash" | "accrual";
   items: { id?: number; category_id: number; period: string; amount: string }[];
 }
 
@@ -311,6 +313,8 @@ export interface PlanFactReport {
   report: "plan_fact";
   budget_id: number;
   budget_name: string;
+  budget_method: "bdr" | "bdds";
+  accrual_basis: "cash" | "accrual";
   periods: string[];
   rows: {
     category_id: number | null;
@@ -322,6 +326,11 @@ export interface PlanFactReport {
     fact_total: string;
     deviation: string;
   }[];
+  balances: {
+    cash_before: string;
+    opening_fact_by_period: Record<string, string>;
+    closing_fact_by_period: Record<string, string>;
+  } | null;
 }
 
 export interface PaymentCalendar {
