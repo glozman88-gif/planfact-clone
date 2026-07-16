@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
-import { useLegalEntities } from "../api/hooks";
-import { RangePicker, defaultRange, fmtNum, type Range } from "../components/ReportControls";
+import { useAccounts, useCounterparties, useLegalEntities } from "../api/hooks";
+import { RangePicker, IntervalPicker, defaultRange, fmtNum, type Range } from "../components/ReportControls";
 import { ExportButton } from "../components/ExportButton";
 import { SearchSelect } from "../components/SearchSelect";
 import { Sparkline } from "../components/Sparkline";
@@ -16,13 +16,18 @@ export function Cashflow() {
   const [range, setRange] = useState<Range>(defaultRange());
   const [groupBy, setGroupBy] = useState<"category" | "project" | "deal">("category");
   const [legalEntityId, setLegalEntityId] = useState("");
+  const [interval, setInterval_] = useState("month");
+  const [counterpartyId, setCounterpartyId] = useState("");
+  const [accountId, setAccountId] = useState("");
   const legalEntities = useLegalEntities();
+  const accounts = useAccounts();
+  const parties = useCounterparties();
 
   const q = useQuery({
-    queryKey: ["cashflow", companyId, range, groupBy, legalEntityId],
+    queryKey: ["cashflow", companyId, range, groupBy, legalEntityId, interval, counterpartyId, accountId],
     enabled: !!companyId,
     queryFn: async () =>
-      (await api.get<CashflowReport>("/api/reports/cashflow", { params: { company_id: companyId, group_by: groupBy, legal_entity_id: legalEntityId || undefined, ...range } })).data,
+      (await api.get<CashflowReport>("/api/reports/cashflow", { params: { company_id: companyId, group_by: groupBy, legal_entity_id: legalEntityId || undefined, interval, counterparty_id: counterpartyId || undefined, account_id: accountId || undefined, ...range } })).data,
   });
   const r = q.data;
 
@@ -34,6 +39,7 @@ export function Cashflow() {
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <RangePicker range={range} onChange={setRange} />
+        <IntervalPicker value={interval} onChange={setInterval_} />
         <div className="card flex gap-1 p-1">
           {([["category", "По статьям"], ["project", "По проектам"], ["deal", "По сделкам"]] as const).map(([k, lbl]) => (
             <button
@@ -49,6 +55,10 @@ export function Cashflow() {
           <SearchSelect className="!w-48" value={legalEntityId} onChange={setLegalEntityId}
             options={legalEntities.data ?? []} emptyLabel="Все юрлица" placeholder="Все юрлица" />
         )}
+        <SearchSelect className="!w-48" value={counterpartyId} onChange={setCounterpartyId}
+          options={parties.data ?? []} emptyLabel="Все контрагенты" placeholder="Все контрагенты" />
+        <SearchSelect className="!w-44" value={accountId} onChange={setAccountId}
+          options={accounts.data ?? []} emptyLabel="Все счета" placeholder="Все счета" />
         <div className="ml-auto">
           <ExportButton
             url="/api/reports/cashflow/export"

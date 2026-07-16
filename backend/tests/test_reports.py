@@ -146,6 +146,26 @@ async def test_plan_fact_bdr(session):
 
 
 @pytest.mark.asyncio
+async def test_pnl_interval_quarter(session):
+    company = await _setup(session)
+    # все операции _setup в Q1 2026 → один столбец «2026-Q1», прибыль 600
+    r = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 3, 31), interval="quarter")
+    assert r["periods"] == ["2026-Q1"]
+    assert D(r["profit_by_period"]["2026-Q1"]) == D("600")
+    # фильтр по контрагенту, которого нет → доход 0
+    r2 = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 3, 31), counterparty_id=999999)
+    assert D(r2["profit_total"]) == D("0")
+
+
+@pytest.mark.asyncio
+async def test_cashflow_interval_day(session):
+    company = await _setup(session)
+    r = await rep.cashflow_report(session, company.id, date(2026, 1, 1), date(2026, 1, 31), interval="day")
+    assert len(r["periods"]) == 31
+    assert r["periods"][0] == "2026-01-01"
+
+
+@pytest.mark.asyncio
 async def test_payment_calendar_intervals(session):
     company = await _setup(session)
     # По месяцам: остаток 1000 → 1300 (янв) → 1600 (фев)

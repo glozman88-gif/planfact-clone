@@ -154,8 +154,9 @@ async def _section(
     cats: dict[int, Category],
     use_accrual: bool,
     include_excluded: bool = False,
+    interval: str = "month",
 ):
-    """Строит секцию отчёта (доходы или расходы) с разбивкой по статьям и месяцам."""
+    """Строит секцию отчёта (доходы или расходы) с разбивкой по статьям и периодам."""
     by_cat: dict[int | None, dict[str, Decimal]] = defaultdict(lambda: _empty_periods(periods))
     for op in ops:
         # тип строки определяем по статье части (доход/расход), а не по типу операции,
@@ -171,7 +172,7 @@ async def _section(
             if row_kind != kind:
                 continue
             d = op.accrual_date or op.op_date if use_accrual else op.op_date
-            mk = month_key(d)
+            mk = bucket_key(d, interval)
             if mk in by_cat[cat_id]:
                 by_cat[cat_id][mk] += amount
 
@@ -264,14 +265,16 @@ async def _legal_entity_account_ids(db: AsyncSession, company_id: int, legal_ent
 
 async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, date_to: date,
                           only_committed: bool = True, group_by: str = "category",
-                          legal_entity_id: int | None = None):
-    """ДДС: денежный поток по видам деятельности × месяцам + перемещения + остатки.
+                          legal_entity_id: int | None = None, interval: str = "month",
+                          counterparty_id: int | None = None, account_id: int | None = None):
+    """ДДС: денежный поток по видам деятельности × периодам + перемещения + остатки.
 
     Группировка как в ПланФакте: Операционный / Инвестиционный / Финансовый поток,
     внутри — Поступления и Выплаты с разбивкой по статьям; затем Перемещения и остатки.
-    legal_entity_id — фильтр по юрлицу (операции по счетам юрлица).
+    legal_entity_id — фильтр по юрлицу; interval — гранулярность колонок;
+    counterparty_id / account_id — доп. фильтры.
     """
-    periods = month_range(date_from, date_to)
+    periods = [k for k, _s, _e in bucket_range(date_from, date_to, interval)]
     cats = await _categories(db, company_id)
     le_accounts = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
 
@@ -285,6 +288,10 @@ async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, da
         conds.append(Operation.status == OperationStatus.committed)
     if le_accounts is not None:
         conds.append(Operation.account_id.in_(le_accounts))
+    if counterparty_id:
+        conds.append(Operation.counterparty_id == counterparty_id)
+    if account_id:
+        conds.append(Operation.account_id == account_id)
     ops = (
         await db.execute(select(Operation).where(*conds).options(selectinload(Operation.items)))
     ).scalars().all()
@@ -302,7 +309,7 @@ async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, da
         side = "income" if op.type == OperationType.income else "outcome"
         for cat_id, _proj, amount in _lines(op):
             act = activity_of(cat_id)
-            mk = month_key(op.op_date)
+            mk = bucket_key(op.op_date, interval)
             if mk in activities[act][side][cat_id]:
                 activities[act][side][cat_id][mk] += amount
 
@@ -353,7 +360,7 @@ async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, da
     writeoff = _empty_periods(periods)
     deposit = _empty_periods(periods)
     for op in moves:
-        mk = month_key(op.op_date)
+        mk = bucket_key(op.op_date, interval)
         if mk not in writeoff:
             continue
         # односторонняя нога парного перемещения влияет только на свою сторону;
@@ -385,7 +392,7 @@ async def cashflow_report(db: AsyncSession, company_id: int, date_from: date, da
         g_inc: dict = defaultdict(lambda: _empty_periods(periods))
         g_out: dict = defaultdict(lambda: _empty_periods(periods))
         for op in ops:
-            mk = month_key(op.op_date)
+            mk = bucket_key(op.op_date, interval)
             side = g_inc if op.type == OperationType.income else g_out
             for cat_id, project_id, amount in _lines(op):
                 key = project_id if group_by == "project" else op.deal_id
@@ -683,7 +690,7 @@ def _leg_group_key(op: Operation, project_id, group_by: str):
     return None
 
 
-async def _pnl_groups(periods, ops, cats, use_accrual, group_by, names):
+async def _pnl_groups(periods, ops, cats, use_accrual, group_by, names, interval="month"):
     """Группировка ОПиУ по проектам/сделкам: доходы/расходы/прибыль/рентабельность.
 
     Группа «Без проекта»/«Без сделки» (ключ None) ставится в конец.
@@ -692,7 +699,7 @@ async def _pnl_groups(periods, ops, cats, use_accrual, group_by, names):
     out: dict = defaultdict(lambda: _empty_periods(periods))
     for op in ops:
         d = op.accrual_date or op.op_date if use_accrual else op.op_date
-        mk = month_key(d)
+        mk = bucket_key(d, interval)
         # ноги с проектом части
         if op.type == OperationType.accrual:
             legs = [(op.debit_category_id, None, _amount(op)), (op.credit_category_id, None, _amount(op))]
@@ -733,7 +740,9 @@ async def _pnl_groups(periods, ops, cats, use_accrual, group_by, names):
 
 async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to: date,
                      method: str = "accrual", group_by: str = "category", with_plan: bool = False,
-                     legal_entity_id: int | None = None, include_excluded: bool = False):
+                     legal_entity_id: int | None = None, include_excluded: bool = False,
+                     interval: str = "month", counterparty_id: int | None = None,
+                     account_id: int | None = None):
     """ОПиУ: доходы и расходы и прибыль.
 
     method="accrual" — метод начисления (по дате начисления, включая операции «начисление»).
@@ -741,10 +750,11 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
     group_by="category"|"project"|"deal" — разрез отчёта (D1).
     legal_entity_id — фильтр по юрлицу (операции по счетам юрлица; начисления без счёта
     под фильтром не учитываются — у них нет привязки к юрлицу).
-    include_excluded=True — включить в отчёт операции/части с отметкой «не учитывать»
-    (переключатель UI: смотреть отчёт независимо от отметок «не учитывать в отчёте»).
+    include_excluded=True — включить в отчёт операции/части с отметкой «не учитывать».
+    interval="day|week|month|quarter|year" — гранулярность колонок.
+    counterparty_id / account_id — доп. фильтры по контрагенту и счёту.
     """
-    periods = month_range(date_from, date_to)
+    periods = [k for k, _s, _e in bucket_range(date_from, date_to, interval)]
     cats = await _categories(db, company_id)
     use_accrual = method != "cash"
     le_accounts = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
@@ -796,11 +806,15 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
     # Фильтр по юрлицу: оставляем операции по счетам юрлица (начисления без счёта отсеиваются)
     if le_accounts is not None:
         ops = [o for o in ops if o.account_id in le_accounts]
+    if counterparty_id:
+        ops = [o for o in ops if o.counterparty_id == counterparty_id]
+    if account_id:
+        ops = [o for o in ops if o.account_id == account_id]
 
     income, inc_tot = await _section(db, company_id, periods, ops, CategoryKind.income, cats,
-                                     use_accrual=use_accrual, include_excluded=include_excluded)
+                                     use_accrual=use_accrual, include_excluded=include_excluded, interval=interval)
     outcome, out_tot = await _section(db, company_id, periods, ops, CategoryKind.outcome, cats,
-                                      use_accrual=use_accrual, include_excluded=include_excluded)
+                                      use_accrual=use_accrual, include_excluded=include_excluded, interval=interval)
 
     # D1: разрез по проектам/сделкам
     groups = None
@@ -811,7 +825,7 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
         else:
             names = {d.id: d.name for d in (await db.execute(
                 select(Deal).where(Deal.company_id == company_id))).scalars()}
-        groups = await _pnl_groups(periods, ops, cats, use_accrual, group_by, names)
+        groups = await _pnl_groups(periods, ops, cats, use_accrual, group_by, names, interval)
     profit = {p: inc_tot[p] - out_tot[p] for p in periods}
     revenue_total = sum(inc_tot.values(), ZERO)
     profit_total = sum(profit.values(), ZERO)
@@ -834,10 +848,14 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
             ).options(selectinload(Operation.items)))).scalars().all()
         if le_accounts is not None:
             pops = [o for o in pops if o.account_id in le_accounts]
+        if counterparty_id:
+            pops = [o for o in pops if o.counterparty_id == counterparty_id]
+        if account_id:
+            pops = [o for o in pops if o.account_id == account_id]
         _, p_inc = await _section(db, company_id, periods, pops, CategoryKind.income, cats,
-                                  use_accrual=use_accrual, include_excluded=include_excluded)
+                                  use_accrual=use_accrual, include_excluded=include_excluded, interval=interval)
         _, p_out = await _section(db, company_id, periods, pops, CategoryKind.outcome, cats,
-                                  use_accrual=use_accrual, include_excluded=include_excluded)
+                                  use_accrual=use_accrual, include_excluded=include_excluded, interval=interval)
         p_profit = {p: p_inc[p] - p_out[p] for p in periods}
         plan_block = {
             "income_by_period": {p: str(p_inc[p]) for p in periods},
@@ -856,7 +874,7 @@ async def pnl_report(db: AsyncSession, company_id: int, date_from: date, date_to
         cat = cats.get(op.category_id)
         if cat and cat.is_dividend:
             d = (op.accrual_date or op.op_date) if use_accrual else op.op_date
-            mk = month_key(d)
+            mk = bucket_key(d, interval)
             if mk in div:
                 div[mk] += op.amount
     div_total = sum(div.values(), ZERO)

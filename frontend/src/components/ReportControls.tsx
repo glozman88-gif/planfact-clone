@@ -35,6 +35,24 @@ export function RangePicker({ range, onChange }: { range: Range; onChange: (r: R
   );
 }
 
+export const REPORT_INTERVALS = [
+  ["day", "День"], ["week", "Неделя"], ["month", "Месяц"], ["quarter", "Квартал"], ["year", "Год"],
+] as const;
+
+// Переключатель гранулярности колонок отчёта (день/неделя/месяц/квартал/год).
+export function IntervalPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="card flex gap-1 p-1">
+      {REPORT_INTERVALS.map(([k, lbl]) => (
+        <button key={k} onClick={() => onChange(k)}
+          className={`rounded-md px-2.5 py-1.5 text-sm ${value === k ? "bg-brand-light font-medium text-brand-dark ring-1 ring-brand" : "text-slate-600"}`}>
+          {lbl}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function fmtNum(v: string | number): string {
   const n = Number(v || 0);
   if (n === 0) return "—";

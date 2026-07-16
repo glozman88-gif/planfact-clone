@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useApp } from "../context/AppContext";
 import { useAccounts, useCategories, useCounterparties, useLegalEntities, useProjects } from "../api/hooks";
-import { RangePicker, defaultRange, fmtNum, type Range } from "../components/ReportControls";
+import { RangePicker, IntervalPicker, defaultRange, fmtNum, type Range } from "../components/ReportControls";
 import { ExportButton } from "../components/ExportButton";
 import { SearchSelect } from "../components/SearchSelect";
 import { Sparkline } from "../components/Sparkline";
@@ -20,6 +20,9 @@ export function Pnl() {
   const [withPlan, setWithPlan] = useState(false);
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [legalEntityId, setLegalEntityId] = useState("");
+  const [interval, setInterval_] = useState("month");
+  const [counterpartyId, setCounterpartyId] = useState("");
+  const [accountId, setAccountId] = useState("");
 
   const qc = useQueryClient();
   const accounts = useAccounts();
@@ -30,10 +33,10 @@ export function Pnl() {
   const [editId, setEditId] = useState<number | null>(null);
 
   const q = useQuery({
-    queryKey: ["pnl", companyId, range, method, groupBy, withPlan, legalEntityId, includeExcluded],
+    queryKey: ["pnl", companyId, range, method, groupBy, withPlan, legalEntityId, includeExcluded, interval, counterpartyId, accountId],
     enabled: !!companyId,
     queryFn: async () =>
-      (await api.get<PnlReport>("/api/reports/pnl", { params: { company_id: companyId, method, group_by: groupBy, with_plan: withPlan, legal_entity_id: legalEntityId || undefined, include_excluded: includeExcluded, ...range } })).data,
+      (await api.get<PnlReport>("/api/reports/pnl", { params: { company_id: companyId, method, group_by: groupBy, with_plan: withPlan, legal_entity_id: legalEntityId || undefined, include_excluded: includeExcluded, interval, counterparty_id: counterpartyId || undefined, account_id: accountId || undefined, ...range } })).data,
   });
   const r = q.data;
 
@@ -56,6 +59,7 @@ export function Pnl() {
       <h1 className="text-2xl font-bold">Отчёт о прибылях и убытках</h1>
       <div className="flex flex-wrap items-center gap-3">
         <RangePicker range={range} onChange={setRange} />
+        <IntervalPicker value={interval} onChange={setInterval_} />
         <div className="card flex gap-1 p-1">
           {([["accrual", "Метод начисления"], ["cash", "Кассовый метод"]] as const).map(([k, lbl]) => (
             <button
@@ -90,6 +94,10 @@ export function Pnl() {
           <SearchSelect className="!w-48" value={legalEntityId} onChange={setLegalEntityId}
             options={legalEntities.data ?? []} emptyLabel="Все юрлица" placeholder="Все юрлица" />
         )}
+        <SearchSelect className="!w-48" value={counterpartyId} onChange={setCounterpartyId}
+          options={parties.data ?? []} emptyLabel="Все контрагенты" placeholder="Все контрагенты" />
+        <SearchSelect className="!w-44" value={accountId} onChange={setAccountId}
+          options={accounts.data ?? []} emptyLabel="Все счета" placeholder="Все счета" />
         <div className="ml-auto">
           <ExportButton
             url="/api/reports/pnl/export"
