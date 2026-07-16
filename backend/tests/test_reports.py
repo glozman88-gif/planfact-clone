@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.db import Base
 from app.models import Account, Budget, BudgetItem, Category, Company, Operation
+from app.models.operations import OperationItem
 from app.models.enums import CategoryKind, OperationStatus, OperationType
 from app.services import reports as rep
 
@@ -143,6 +144,36 @@ async def test_plan_fact_bdr(session):
     assert D(by_name["Выручка"]["fact_by_period"]["2026-02"]) == D("300")
     assert D(by_name["Выручка"]["plan_by_period"]["2026-01"]) == D("400")
     assert D(by_name["Аренда"]["fact_by_period"]["2026-01"]) == D("200")
+
+
+@pytest.mark.asyncio
+async def test_distribute_over_period(session):
+    """«Распределить на период»: части с датой начисления признаются в свой месяц (ОПиУ
+    по начислению), а касса (ДДС/кассовый ОПиУ) — вся в месяце оплаты."""
+    company = await _setup(session)
+    rent = (await session.execute(select(Category).where(Category.name == "Аренда"))).scalar_one()
+    acc = (await session.execute(select(Account))).scalars().first()
+    op = Operation(company_id=company.id, type=OperationType.outcome, status=OperationStatus.committed,
+                   op_date=date(2026, 1, 15), accrual_date=date(2026, 1, 15), account_id=acc.id,
+                   amount=Decimal("300"), base_amount=Decimal("300"))
+    op.items = [
+        OperationItem(category_id=rent.id, amount=Decimal("100"), accrual_date=date(2026, 1, 31)),
+        OperationItem(category_id=rent.id, amount=Decimal("200"), accrual_date=date(2026, 2, 28)),
+    ]
+    session.add(op)
+    await session.commit()
+
+    # метод начисления: Аренда = 200(_setup, янв) + 100(часть, янв) в январе и 200(часть) в феврале
+    acc_r = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28), method="accrual")
+    rent_row = next(c for c in acc_r["outcome"]["categories"] if c["name"] == "Аренда")
+    assert D(rent_row["by_period"]["2026-01"]) == D("300")
+    assert D(rent_row["by_period"]["2026-02"]) == D("200")
+    assert D(acc_r["outcome"]["total"]) == D("500")
+    # кассовый метод: вся операция (300) в январе по дате оплаты → расход января 500
+    cash_r = await rep.pnl_report(session, company.id, date(2026, 1, 1), date(2026, 2, 28), method="cash")
+    assert D(cash_r["outcome"]["total"]) == D("500")
+    cash_rent = next(c for c in cash_r["outcome"]["categories"] if c["name"] == "Аренда")
+    assert D(cash_rent["by_period"]["2026-01"]) == D("500")
 
 
 @pytest.mark.asyncio

@@ -120,19 +120,20 @@ def _fallback_kind(op: Operation) -> CategoryKind | None:
 
 
 def _pnl_legs(op: Operation, include_excluded: bool = False):
-    """Ноги операции для ОПиУ: (category_id, amount).
+    """Ноги операции для ОПиУ: (category_id, amount, item_accrual_date).
 
     Начисление (accrual) раскрывается в дебетовую и кредитовую ноги по своим
     статьям (Дт расход / Кт доход и т.п.). Остальные типы — по частям items[].
+    item_accrual_date — дата начисления части («распределить на период»): если задана,
+    часть признаётся в ОПиУ в свой месяц; иначе None → берётся дата операции.
     Исключённые операции и части разбивки (excluded) в доходы/расходы не идут,
-    кроме случая include_excluded=True (переключатель «показать с учётом
-    исключённых» — чтобы посмотреть отчёт независимо от отметок «не учитывать»)."""
+    кроме случая include_excluded=True."""
     if not include_excluded and getattr(op, "excluded", False):
         return
     if op.type == OperationType.accrual:
         amt = _amount(op)
-        yield op.debit_category_id, amt
-        yield op.credit_category_id, amt
+        yield op.debit_category_id, amt, None
+        yield op.credit_category_id, amt, None
     elif op.items:
         total = _amount(op)
         raw = op.amount or ZERO
@@ -140,9 +141,9 @@ def _pnl_legs(op: Operation, include_excluded: bool = False):
             if not include_excluded and getattr(it, "excluded", False):
                 continue
             share = (it.amount / raw * total) if raw else ZERO
-            yield it.category_id, share
+            yield it.category_id, share, getattr(it, "accrual_date", None)
     else:
-        yield op.category_id, _amount(op)
+        yield op.category_id, _amount(op), None
 
 
 async def _section(
@@ -161,7 +162,7 @@ async def _section(
     for op in ops:
         # тип строки определяем по статье части (доход/расход), а не по типу операции,
         # т.к. accrual/отгрузка/поставка могут быть и доходом, и расходом
-        for cat_id, amount in _pnl_legs(op, include_excluded):
+        for cat_id, amount, item_date in _pnl_legs(op, include_excluded):
             cat = cats.get(cat_id) if cat_id else None
             if cat is not None:
                 row_kind = cat.kind
@@ -171,7 +172,9 @@ async def _section(
                 row_kind = _fallback_kind(op)
             if row_kind != kind:
                 continue
-            d = op.accrual_date or op.op_date if use_accrual else op.op_date
+            # в методе начисления часть с собственной датой («распределить на период»)
+            # признаётся в свой месяц; иначе — по дате начисления/оплаты операции
+            d = (item_date or op.accrual_date or op.op_date) if use_accrual else op.op_date
             mk = bucket_key(d, interval)
             if mk in by_cat[cat_id]:
                 by_cat[cat_id][mk] += amount
@@ -964,7 +967,7 @@ async def pnl_category_operations(db: AsyncSession, company_id: int, category_id
 
     rows = []
     for op in ops:
-        for cat_id, amount in _pnl_legs(op, include_excluded):
+        for cat_id, amount, _item_date in _pnl_legs(op, include_excluded):
             # сопоставление статьи ноги с запрошенной (учёт «Без статьи» = None)
             if cat_id != category_id:
                 continue
@@ -1115,11 +1118,11 @@ async def plan_fact_report(db: AsyncSession, company_id: int, budget_id: int):
 
     fact: dict[int, dict[str, Decimal]] = defaultdict(lambda: _empty_periods(periods))
     for op in ops:
-        d = (op.accrual_date or op.op_date) if use_accrual_fact else op.op_date
-        mk = month_key(d)
-        for cat_id, amount in _pnl_legs(op):
+        for cat_id, amount, item_date in _pnl_legs(op):
             if cat_id is None:
                 continue
+            d = (item_date or op.accrual_date or op.op_date) if use_accrual_fact else op.op_date
+            mk = month_key(d)
             if mk in fact[cat_id]:
                 fact[cat_id][mk] += amount
 

@@ -13,6 +13,9 @@ from app.core.config import settings
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Аддитивные миграции схемы (идемпотентно, ADD COLUMN IF NOT EXISTS) до обслуживания
+    from app.bootstrap import run_additive_migrations
+    await run_additive_migrations()
     # Фоновая автосинхронизация банков по настройке частоты (daily/twice/manual)
     from app.services.auto_sync import scheduler_loop
     task = asyncio.create_task(scheduler_loop())

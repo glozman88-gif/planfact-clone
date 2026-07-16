@@ -122,9 +122,18 @@ async def _legal_entity_account_ids(db, company_id: int, legal_entity_id: int) -
 
 def _op_conds(company_id, date_from, date_to, type, types, status,
               account_id, category_id, project_id, counterparty_id, deal_id, search,
-              account_ids=None, amount_from=None, amount_to=None):
+              account_ids=None, amount_from=None, amount_to=None, no_category=False):
     """Условия выборки операций — общие для списка и экспорта."""
     conds = [Operation.company_id == company_id]
+    if no_category:
+        # «без статьи»: нет статьи у операции, нет Дт/Кт (начисление) и нет частей со статьёй
+        cat_items = select(OperationItem.operation_id).where(OperationItem.category_id.isnot(None))
+        conds.append(
+            Operation.category_id.is_(None)
+            & Operation.debit_category_id.is_(None)
+            & Operation.credit_category_id.is_(None)
+            & Operation.id.notin_(cat_items)
+        )
     if amount_from not in (None, ""):
         conds.append(Operation.amount >= Decimal(str(amount_from)))
     if amount_to not in (None, ""):
@@ -182,13 +191,14 @@ async def list_operations(
     amount_from: Decimal | None = None,
     amount_to: Decimal | None = None,
     search: str | None = None,
+    no_category: bool = False,
     limit: int = Query(100, le=1000),
     offset: int = 0,
 ):
     account_ids = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
     conds = _op_conds(company_id, date_from, date_to, type, types, status,
                       account_id, category_id, project_id, counterparty_id, deal_id, search,
-                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to)
+                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to, no_category=no_category)
 
     total = (await db.execute(select(func.count()).select_from(Operation).where(*conds))).scalar_one()
 

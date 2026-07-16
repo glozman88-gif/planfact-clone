@@ -30,7 +30,7 @@ export function Operations() {
   const legalEntities = useLegalEntities();
 
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
-  const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "" });
+  const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "", no_category: false });
   const [editing, setEditing] = useState<Partial<Operation> | null>(null);
   const [searchParams] = useSearchParams();
   useEffect(() => {
@@ -57,7 +57,7 @@ export function Operations() {
           legal_entity_id: filters.legal_entity_id || undefined,
           status: filters.status || undefined,
           amount_from: filters.amount_from || undefined, amount_to: filters.amount_to || undefined,
-          search: filters.search || undefined,
+          search: filters.search || undefined, no_category: filters.no_category || undefined,
         },
       })).data,
     getNextPageParam: (lastPage, allPages) => {
@@ -202,6 +202,10 @@ export function Operations() {
           )}
           <Sel label="Счёт" value={filters.account_id} onChange={(v) => setFilters({ ...filters, account_id: v })} options={accounts.data} />
           <Sel label="Статья" value={filters.category_id} onChange={(v) => setFilters({ ...filters, category_id: v })} options={categories.data} />
+          <label className="flex items-center gap-2 text-sm text-slate-600" title="Показать только операции без статьи (не распределённые)">
+            <input type="checkbox" checked={filters.no_category} onChange={(e) => setFilters({ ...filters, no_category: e.target.checked, category_id: e.target.checked ? "" : filters.category_id })} />
+            Только без статьи
+          </label>
           <Sel label="Проект" value={filters.project_id} onChange={(v) => setFilters({ ...filters, project_id: v })} options={projects.data} />
           <Sel label="Контрагент" value={filters.counterparty_id} onChange={(v) => setFilters({ ...filters, counterparty_id: v })} options={parties.data} />
         </div>
@@ -371,6 +375,27 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
     accrual_date: (!prev.accrual_date || prev.accrual_date === prev.op_date) ? v : prev.accrual_date,
   }));
 
+  const [distN, setDistN] = useState(12);
+  // «Распределить на период»: разбить сумму на N месяцев, каждая часть признаётся в ОПиУ
+  // в свой месяц (accrual_date = последний день месяца), касса остаётся в дате оплаты.
+  function distribute() {
+    const total = Number(f.amount) || 0;
+    const n = Math.max(1, Math.min(60, Number(distN) || 1));
+    if (!total) return;
+    const start = new Date((f.op_date || today()).slice(0, 7) + "-01");
+    const per = Math.round((total / n) * 100) / 100;
+    let acc = 0;
+    const parts = Array.from({ length: n }, (_, i) => {
+      const last = new Date(start.getFullYear(), start.getMonth() + i + 1, 0);
+      const amt = i === n - 1 ? Math.round((total - acc) * 100) / 100 : per;
+      acc += amt;
+      return { amount: String(amt), category_id: f.category_id || "", project_id: f.project_id || "",
+               accrual_date: `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`, excluded: false };
+    });
+    setItems(parts);
+    setSplit(true);
+  }
+
   const isMove = f.type === "move", isAccrual = f.type === "accrual";
   // Парное перемещение (деньги в пути) доступно только при создании нового move
   const canPair = isMove && !f.id && !!onSaveMovePair;
@@ -407,7 +432,7 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
       project_id: f.project_id || null, counterparty_id: f.counterparty_id || null,
       description: f.description || null,
       excluded: !!f.excluded,
-      items: (!isMove && !isAccrual && split) ? items.filter((i) => i.amount).map((i) => ({ amount: String(i.amount), category_id: i.category_id || null, project_id: i.project_id || null, excluded: !!i.excluded })) : [],
+      items: (!isMove && !isAccrual && split) ? items.filter((i) => i.amount).map((i) => ({ amount: String(i.amount), category_id: i.category_id || null, project_id: i.project_id || null, accrual_date: i.accrual_date || null, excluded: !!i.excluded })) : [],
       id: f.id,
     };
     onSave(payload);
@@ -522,14 +547,24 @@ export function OperationModal({ op, onClose, onSave, onSaveMovePair, accounts, 
                       onChange={(val) => setItems(items.map((x, i) => i === idx ? { ...x, category_id: val } : x))} />
                     <SearchSelect className="w-full" value={it.project_id} placeholder="Проект…" options={projects}
                       onChange={(val) => setItems(items.map((x, i) => i === idx ? { ...x, project_id: val } : x))} />
+                    <input type="date" className="input !w-36" title="Дата начисления части (в каком месяце признаётся в ОПиУ)"
+                      value={it.accrual_date ?? ""} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, accrual_date: e.target.value } : x))} />
                     <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-500" title="Не учитывать эту часть в доходах/расходах (ОПиУ)">
                       <input type="checkbox" checked={!!it.excluded} onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, excluded: e.target.checked } : x))} /> не учит.
                     </label>
                     <button type="button" className="text-red-500" onClick={() => setItems(items.filter((_, i) => i !== idx))}>×</button>
                   </div>
                 ))}
-                <button type="button" className="btn-ghost" onClick={() => setItems([...items, { amount: "", category_id: "", project_id: "", excluded: false }])}>+ часть</button>
-                <div className="text-xs text-slate-500">Сумма частей должна равняться сумме операции ({f.amount || 0}).</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" className="btn-ghost" onClick={() => setItems([...items, { amount: "", category_id: "", project_id: "", accrual_date: "", excluded: false }])}>+ часть</button>
+                  <span className="mx-1 text-slate-300">|</span>
+                  <span className="text-xs text-slate-500">Распределить на</span>
+                  <input type="number" min={1} max={60} className="input !w-16" value={distN} onChange={(e) => setDistN(Number(e.target.value))} />
+                  <span className="text-xs text-slate-500">мес.</span>
+                  <button type="button" className="btn-ghost text-brand" title="Разбить сумму на месяцы: каждая часть признаётся в ОПиУ в свой месяц"
+                    onClick={distribute}>Распределить на период</button>
+                </div>
+                <div className="text-xs text-slate-500">Сумма частей должна равняться сумме операции ({f.amount || 0}). Дата части = месяц признания в ОПиУ.</div>
               </div>
             )}
           </div>

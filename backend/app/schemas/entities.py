@@ -227,6 +227,7 @@ class OperationItemIn(BaseModel):
     amount: Decimal
     category_id: int | None = None
     project_id: int | None = None
+    accrual_date: date | None = None
     description: str | None = None
     excluded: bool = False
 
@@ -236,6 +237,7 @@ class OperationItemOut(ORMModel):
     amount: Decimal
     category_id: int | None
     project_id: int | None
+    accrual_date: date | None = None
     description: str | None
     excluded: bool = False
 

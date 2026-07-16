@@ -12,7 +12,7 @@ import sys
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.db import Base, SessionLocal, engine
 from app.core.security import hash_password
@@ -35,6 +35,21 @@ CURRENCIES = [("RUB", "Российский рубль", "₽"), ("USD", "Дол
 async def create_schema() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+# Аддитивные миграции: колонки, которые create_all НЕ добавляет к уже существующим
+# таблицам на проде. Только идемпотентные ALTER ... ADD COLUMN IF NOT EXISTS (никогда
+# не DROP). Выполняются при старте приложения (main.lifespan) и в bootstrap.
+_ADDITIVE_MIGRATIONS = [
+    # part-level дата начисления для «распределить на период»
+    "ALTER TABLE operation_items ADD COLUMN IF NOT EXISTS accrual_date date",
+]
+
+
+async def run_additive_migrations() -> None:
+    async with engine.begin() as conn:
+        for stmt in _ADDITIVE_MIGRATIONS:
+            await conn.execute(text(stmt))
 
 
 async def ensure_currencies(db) -> None:

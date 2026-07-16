@@ -77,6 +77,9 @@ class OperationItem(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), index=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    # Дата начисления части («распределить на период»): часть признаётся в ОПиУ в свой
+    # месяц. Если не задана — берётся дата начисления операции.
+    accrual_date: Mapped[date | None] = mapped_column(Date)
     description: Mapped[str | None] = mapped_column(String(500))
     # Исключить эту часть разбивки из доходов/расходов в отчётах
     excluded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
