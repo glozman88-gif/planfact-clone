@@ -31,13 +31,20 @@ export function CrudPage({
   const [editing, setEditing] = useState<any | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkEdit, setBulkEdit] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   const list = useQuery({
-    queryKey: [queryKey, companyId],
+    queryKey: [queryKey, companyId, showArchived],
     enabled: !!companyId,
-    queryFn: async () => (await api.get(path, { params: { company_id: companyId } })).data as any[],
+    queryFn: async () => (await api.get(path, { params: { company_id: companyId, include_archived: showArchived } })).data as any[],
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: [queryKey] });
+  // Архивировать/восстановить — через bulk-update (поле is_archived поддерживается фабрикой CRUD)
+  const archive = useMutation({
+    mutationFn: ({ id, val }: { id: number; val: boolean }) => api.post(`${path}/bulk-update`, { ids: [id], set: { is_archived: val } }, { params: { company_id: companyId } }),
+    onSuccess: invalidate,
+  });
+  const hasArchive = !list.data?.length || "is_archived" in (list.data[0] ?? {});
   const bulkDelete = useMutation({
     mutationFn: (ids: number[]) => api.post(`${path}/bulk-delete`, { ids }, { params: { company_id: companyId } }),
     onSuccess: () => { invalidate(); setSelected(new Set()); },
@@ -72,7 +79,15 @@ export function CrudPage({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{title}</h1>
-        <button className="btn-primary" onClick={() => setEditing(blank())}>+ Добавить</button>
+        <div className="flex items-center gap-3">
+          {hasArchive && (
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+              Показать архивные
+            </label>
+          )}
+          <button className="btn-primary" onClick={() => setEditing(blank())}>+ Добавить</button>
+        </div>
       </div>
 
       {selected.size > 0 && (
@@ -95,15 +110,21 @@ export function CrudPage({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className={`hover:bg-slate-50 ${selected.has(row.id) ? "bg-brand-light" : ""}`}>
+              <tr key={row.id} className={`hover:bg-slate-50 ${selected.has(row.id) ? "bg-brand-light" : ""} ${row.is_archived ? "opacity-50" : ""}`}>
                 <td><input type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} /></td>
                 {columns.map((c) => (
                   <td key={c.name} className={c.align === "right" ? "text-right" : ""}>
                     {c.render ? c.render(row) : row[c.name]}
+                    {c === columns[0] && row.is_archived ? <span className="ml-2 rounded bg-slate-200 px-1 text-xs text-slate-500">архив</span> : null}
                   </td>
                 ))}
                 <td className="whitespace-nowrap text-right">
                   <button className="text-brand hover:underline" onClick={() => setEditing(row)}>ред.</button>
+                  {hasArchive && (
+                    <button className="ml-3 text-slate-500 hover:underline" onClick={() => archive.mutate({ id: row.id, val: !row.is_archived })}>
+                      {row.is_archived ? "из архива" : "в архив"}
+                    </button>
+                  )}
                   <button className="ml-3 text-red-500 hover:underline" onClick={() => { if (confirm("Удалить запись?")) remove.mutate(row.id); }}>удал.</button>
                 </td>
               </tr>

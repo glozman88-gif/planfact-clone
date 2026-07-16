@@ -11,11 +11,12 @@ export function Counterparties() {
   const { companyId } = useApp();
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   const list = useQuery({
-    queryKey: ["contractors-calc", companyId],
+    queryKey: ["contractors-calc", companyId, showArchived],
     enabled: !!companyId,
-    queryFn: async () => (await api.get("/api/contractors-calc", { params: { company_id: companyId } })).data as any[],
+    queryFn: async () => (await api.get("/api/contractors-calc", { params: { company_id: companyId, include_archived: showArchived } })).data as any[],
   });
 
   const create = useMutation({
@@ -26,12 +27,22 @@ export function Counterparties() {
     mutationFn: (id: number) => api.delete(`/api/counterparties/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["contractors-calc"] }),
   });
+  const archive = useMutation({
+    mutationFn: ({ id, val }: { id: number; val: boolean }) => api.post("/api/counterparties/bulk-update", { ids: [id], set: { is_archived: val } }, { params: { company_id: companyId } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["contractors-calc"] }),
+  });
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Контрагенты</h1>
-        <button className="btn-primary" onClick={() => setAdding(true)}>+ Добавить</button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Показать архивные
+          </label>
+          <button className="btn-primary" onClick={() => setAdding(true)}>+ Добавить</button>
+        </div>
       </div>
       <div className="card overflow-x-auto">
         <table className="table whitespace-nowrap">
@@ -44,8 +55,8 @@ export function Counterparties() {
           </thead>
           <tbody>
             {list.data?.map((r) => (
-              <tr key={r.id} className="hover:bg-slate-50">
-                <td className="font-medium">{r.name}</td>
+              <tr key={r.id} className={`hover:bg-slate-50 ${r.is_archived ? "opacity-50" : ""}`}>
+                <td className="font-medium">{r.name}{r.is_archived ? <span className="ml-2 rounded bg-slate-200 px-1 text-xs text-slate-500">архив</span> : null}</td>
                 <td>{KIND[r.kind] ?? r.kind}</td>
                 <td>{r.inn || "—"}</td>
                 <td className="text-right">{r.operations}</td>
@@ -54,8 +65,9 @@ export function Counterparties() {
                 <td className="text-right text-emerald-600">{fmtNum(r.income)}</td>
                 <td className="text-right text-red-600">{fmtNum(r.outcome)}</td>
                 <td className={`text-right font-medium ${Number(r.diff) < 0 ? "text-red-600" : ""}`}>{fmtNum(r.diff)}</td>
-                <td className="text-right">
-                  <button className="text-red-500 hover:underline" onClick={() => confirm("Удалить контрагента?") && remove.mutate(r.id)}>удал.</button>
+                <td className="whitespace-nowrap text-right">
+                  <button className="text-slate-500 hover:underline" onClick={() => archive.mutate({ id: r.id, val: !r.is_archived })}>{r.is_archived ? "из архива" : "в архив"}</button>
+                  <button className="ml-3 text-red-500 hover:underline" onClick={() => confirm("Удалить контрагента?") && remove.mutate(r.id)}>удал.</button>
                 </td>
               </tr>
             ))}

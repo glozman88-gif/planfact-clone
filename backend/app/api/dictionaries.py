@@ -121,7 +121,7 @@ async def account_balances(db: DbDep, _: CurrentUser, company_id: int = Query(..
 @router.get("/api/contractors-calc", tags=["counterparties"])
 async def contractors_calc(
     db: DbDep, _: CurrentUser, company_id: int = Query(...),
-    as_of: date_cls | None = Query(None),
+    as_of: date_cls | None = Query(None), include_archived: bool = Query(False),
 ):
     """Контрагенты с показателями дебиторки/кредиторки as-of (D7, метод Calculation).
 
@@ -132,12 +132,10 @@ async def contractors_calc(
     """
     ZERO = Decimal("0")
     asof = as_of or date_cls.today()
-    parties = (await db.execute(
-        select(Counterparty).where(
-            Counterparty.company_id == company_id, Counterparty.is_archived.is_(False),
-            Counterparty.is_technical.is_(False),  # G2: «Не выбран» вне рейтинга
-        )
-    )).scalars().all()
+    cp_conds = [Counterparty.company_id == company_id, Counterparty.is_technical.is_(False)]
+    if not include_archived:
+        cp_conds.append(Counterparty.is_archived.is_(False))
+    parties = (await db.execute(select(Counterparty).where(*cp_conds))).scalars().all()
 
     # Все денежные операции контрагентов до as_of включительно
     ops = (await db.execute(select(Operation).where(
@@ -150,6 +148,7 @@ async def contractors_calc(
     for cp in parties:
         agg[cp.id] = {
             "id": cp.id, "name": cp.name, "kind": cp.kind.value, "group_id": cp.group_id, "inn": cp.inn,
+            "is_archived": bool(cp.is_archived),
             "operations": 0, "income": ZERO, "outcome": ZERO,
             "receivable_cash": ZERO, "receivable_noncash": ZERO,
             "payable_cash": ZERO, "payable_noncash": ZERO,
@@ -192,7 +191,7 @@ async def contractors_calc(
         receivable = a["receivable_cash"] + a["receivable_noncash"]
         payable = a["payable_cash"] + a["payable_noncash"]
         out.append({
-            **{k: a[k] for k in ("id", "name", "kind", "group_id", "inn", "operations")},
+            **{k: a[k] for k in ("id", "name", "kind", "group_id", "inn", "operations", "is_archived")},
             "income": str(a["income"]), "outcome": str(a["outcome"]),
             "diff": str(a["income"] - a["outcome"]),
             "receivable": str(receivable), "payable": str(payable),
@@ -241,21 +240,21 @@ async def category_group_list(db: DbDep, _: CurrentUser, company_id: int = Query
 async def projects_calc(
     db: DbDep, _: CurrentUser, company_id: int = Query(...),
     method: str = Query("cash"), active_only: bool = Query(False),
+    include_archived: bool = Query(False),
 ):
     """Проекты с показателями: доходы, расходы, прибыль, рентабельность (D8).
 
     method="cash" — факт по проведённым платежам (op_date); "accrual" — по начислению.
     active_only — исключить проекты без фактической активности (доход и расход = 0).
+    include_archived — показывать и архивные проекты.
     Строка «Без проекта» (операции без project_id) добавляется в конец.
     """
     ZERO = Decimal("0")
     use_accrual = method == "accrual"
-    projects = (await db.execute(
-        select(Project).where(
-            Project.company_id == company_id, Project.is_archived.is_(False),
-            Project.is_technical.is_(False),  # G2: «Не выбран» вне рейтинга
-        )
-    )).scalars().all()
+    proj_conds = [Project.company_id == company_id, Project.is_technical.is_(False)]
+    if not include_archived:
+        proj_conds.append(Project.is_archived.is_(False))
+    projects = (await db.execute(select(Project).where(*proj_conds))).scalars().all()
 
     # агрегируем по проектам одним проходом (вкл. «Без проекта» = ключ None)
     inc: dict = defaultdict(lambda: ZERO)
@@ -294,6 +293,7 @@ async def projects_calc(
         rows.append({
             "id": pid, "name": pr.name if pr else "Без проекта",
             "group_id": pr.group_id if pr else None,
+            "is_archived": bool(pr.is_archived) if pr else False,
             "income": str(income), "outcome": str(outcome), "profit": str(profit),
             "margin": margin, "operations": cnt.get(pid, 0),
         })
