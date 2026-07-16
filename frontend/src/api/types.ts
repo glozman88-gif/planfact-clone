@@ -98,7 +98,9 @@ export interface OperationItem {
   amount: string;
   category_id?: number | null;
   project_id?: number | null;
+  accrual_date?: string | null;
   description?: string | null;
+  excluded?: boolean;
 }
 
 export interface Operation {
@@ -123,6 +125,7 @@ export interface Operation {
   counterparty_id?: number | null;
   deal_id?: number | null;
   description?: string | null;
+  excluded?: boolean;
   items: OperationItem[];
 }
 

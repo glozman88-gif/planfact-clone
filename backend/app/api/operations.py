@@ -122,7 +122,7 @@ async def _legal_entity_account_ids(db, company_id: int, legal_entity_id: int) -
 
 def _op_conds(company_id, date_from, date_to, type, types, status,
               account_id, category_id, project_id, counterparty_id, deal_id, search,
-              account_ids=None, amount_from=None, amount_to=None, no_category=False):
+              account_ids=None, amount_from=None, amount_to=None, no_category=False, excluded=None):
     """Условия выборки операций — общие для списка и экспорта."""
     conds = [Operation.company_id == company_id]
     if no_category:
@@ -134,6 +134,11 @@ def _op_conds(company_id, date_from, date_to, type, types, status,
             & Operation.credit_category_id.is_(None)
             & Operation.id.notin_(cat_items)
         )
+    if excluded is not None:
+        # «исключённые»: операция с отметкой «не учитывать» ИЛИ имеющая исключённую часть
+        exc_items = select(OperationItem.operation_id).where(OperationItem.excluded.is_(True))
+        is_excluded = Operation.excluded.is_(True) | Operation.id.in_(exc_items)
+        conds.append(is_excluded if excluded else ~is_excluded)
     if amount_from not in (None, ""):
         conds.append(Operation.amount >= Decimal(str(amount_from)))
     if amount_to not in (None, ""):
@@ -192,13 +197,15 @@ async def list_operations(
     amount_to: Decimal | None = None,
     search: str | None = None,
     no_category: bool = False,
+    excluded: bool | None = None,
     limit: int = Query(100, le=1000),
     offset: int = 0,
 ):
     account_ids = await _legal_entity_account_ids(db, company_id, legal_entity_id) if legal_entity_id else None
     conds = _op_conds(company_id, date_from, date_to, type, types, status,
                       account_id, category_id, project_id, counterparty_id, deal_id, search,
-                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to, no_category=no_category)
+                      account_ids=account_ids, amount_from=amount_from, amount_to=amount_to,
+                      no_category=no_category, excluded=excluded)
 
     total = (await db.execute(select(func.count()).select_from(Operation).where(*conds))).scalar_one()
 

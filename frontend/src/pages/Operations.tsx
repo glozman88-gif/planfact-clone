@@ -30,7 +30,7 @@ export function Operations() {
   const legalEntities = useLegalEntities();
 
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
-  const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "", no_category: false });
+  const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "", no_category: false, excluded: "" });
   const [editing, setEditing] = useState<Partial<Operation> | null>(null);
   const [searchParams] = useSearchParams();
   useEffect(() => {
@@ -58,6 +58,7 @@ export function Operations() {
           status: filters.status || undefined,
           amount_from: filters.amount_from || undefined, amount_to: filters.amount_to || undefined,
           search: filters.search || undefined, no_category: filters.no_category || undefined,
+          excluded: filters.excluded === "" ? undefined : filters.excluded === "1",
         },
       })).data,
     getNextPageParam: (lastPage, allPages) => {
@@ -206,6 +207,14 @@ export function Operations() {
             <input type="checkbox" checked={filters.no_category} onChange={(e) => setFilters({ ...filters, no_category: e.target.checked, category_id: e.target.checked ? "" : filters.category_id })} />
             Только без статьи
           </label>
+          <div>
+            <div className="label">Исключённые из отчётов</div>
+            <select className="input" value={filters.excluded} onChange={(e) => setFilters({ ...filters, excluded: e.target.value })}>
+              <option value="">Все</option>
+              <option value="1">Только исключённые</option>
+              <option value="0">Без исключённых</option>
+            </select>
+          </div>
           <Sel label="Проект" value={filters.project_id} onChange={(v) => setFilters({ ...filters, project_id: v })} options={projects.data} />
           <Sel label="Контрагент" value={filters.counterparty_id} onChange={(v) => setFilters({ ...filters, counterparty_id: v })} options={parties.data} />
         </div>
@@ -273,14 +282,17 @@ export function Operations() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((op) => (
-                <tr key={op.id} className={`hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : ""}`}>
+              {rows.map((op) => {
+                const isExcluded = op.excluded || op.items?.some((i: any) => i.excluded);
+                return (
+                <tr key={op.id} className={`hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : isExcluded ? "bg-amber-50" : ""} ${isExcluded ? "border-l-2 border-amber-400" : ""}`}>
                   <td><input type="checkbox" checked={selected.has(op.id)} onChange={() => toggleOne(op.id)} /></td>
                   <td className="whitespace-nowrap">{op.op_date}</td>
                   <td>{op.type === "accrual" ? "—" : accName(op.account_id)}{op.type === "move" ? ` → ${accName(op.to_account_id)}` : ""}</td>
                   <td className="whitespace-nowrap">
                     <span className={TYPE_COLOR[op.type]}>{TYPE_LABEL[op.type]}</span>
                     {op.status === "planned" && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700">план</span>}
+                    {isExcluded && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700" title="Исключена из отчётов («не учитывать»)">не учит.</span>}
                     {op.bound_move_operation_id && <span className="ml-1 rounded bg-sky-100 px-1 text-xs text-sky-700" title={`Парное перемещение: ${op.account_id ? "списание со счёта" : "зачисление на счёт"}`}>{op.account_id ? "↑ в пути" : "↓ в пути"}</span>}
                   </td>
                   <td>{partyName(op.counterparty_id)}</td>
@@ -294,7 +306,8 @@ export function Operations() {
                     <button className="ml-2 text-red-500 hover:underline" onClick={() => confirm("Удалить операцию?") && remove.mutate(op.id)}>×</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {list.data && rows.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-slate-400">Нет операций</td></tr>}
             </tbody>
             {sm && sm.count > 0 && (
