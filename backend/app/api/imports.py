@@ -15,7 +15,9 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbDep
 from app.models import Account, Category, Counterparty, ImportLog, ImportRule, Operation, Project
 from app.models.enums import CategoryKind, OperationStatus, OperationType
+from app.api.rules import load_rules
 from app.services.currency import to_base_amount
+from app.services.dist_rules import apply_rules
 from app.services.import_ops import (
     IMPORT_FIELDS,
     parse_amount,
@@ -90,6 +92,9 @@ async def import_operations(
         return (row[idx] or "").strip()
 
     two_column = mp.get("amount_income") is not None or mp.get("amount_outcome") is not None
+    # Правила распределения (scope="bank") применяются и к файловому импорту — авто-статья/
+    # проект/контрагент по условиям, заполняя только незаданные значения.
+    rules = await load_rules(db, company_id, "bank")
 
     total = imported = 0
     errors: list[str] = []
@@ -148,6 +153,16 @@ async def import_operations(
         proj = projects.get(cell(row, "project").lower())
         accrual_d = parse_date(cell(row, "accrual_date")) or d  # нет даты начисления → дата оплаты
 
+        cat_id = cat.id if cat else None
+        party_id = party.id if party else None
+        proj_id = proj.id if proj else None
+        if rules:  # правила распределения заполняют незаданные статью/проект/контрагента
+            rr = {"type": otype.value, "counterparty": party_name or "",
+                  "account": cell(row, "account"), "description": cell(row, "description") or "",
+                  "amount": str(amount), "category_id": cat_id, "counterparty_id": party_id, "project_id": proj_id}
+            apply_rules([rr], rules)
+            cat_id, party_id, proj_id = rr.get("category_id"), rr.get("counterparty_id"), rr.get("project_id")
+
         op = Operation(
             company_id=company_id,
             type=otype,
@@ -157,9 +172,9 @@ async def import_operations(
             account_id=acc.id if acc else None,
             amount=amount,
             currency_code=acc.currency_code if acc else "RUB",
-            category_id=cat.id if cat else None,
-            counterparty_id=party.id if party else None,
-            project_id=proj.id if proj else None,
+            category_id=cat_id,
+            counterparty_id=party_id,
+            project_id=proj_id,
             description=cell(row, "description") or None,
         )
         op.base_amount = await to_base_amount(db, company_id, amount, op.currency_code, d)

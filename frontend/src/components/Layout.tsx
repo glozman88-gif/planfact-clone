@@ -65,7 +65,13 @@ const NAV: NavGroup[] = [
       { to: "/products", label: "Товары и услуги" },
     ],
   },
-  { to: "/import", label: "Импорт", icon: "import" },
+  {
+    to: "/import", label: "Импорт", icon: "import",
+    children: [
+      { to: "/import", label: "Загрузка файла" },
+      { to: "/import-rules", label: "Правила распределения" },
+    ],
+  },
   { to: "/settings", label: "Настройки", icon: "settings" },
 ];
 
