@@ -20,6 +20,41 @@ const TYPE_COLOR: Record<OperationType, string> = {
 };
 const today = () => new Date().toISOString().slice(0, 10);
 
+// Столбцы таблицы операций с шириной по умолчанию (можно тянуть за правый край; ширины
+// сохраняются в localStorage; текст обрезается многоточием под ширину столбца).
+const OP_COLS = [
+  { key: "date", label: "Дата", w: 92, align: "" },
+  { key: "account", label: "Счёт", w: 140, align: "" },
+  { key: "type", label: "Тип", w: 120, align: "" },
+  { key: "counterparty", label: "Контрагент", w: 170, align: "" },
+  { key: "category", label: "Статья / назначение", w: 250, align: "" },
+  { key: "project", label: "Проект", w: 110, align: "" },
+  { key: "amount", label: "Сумма", w: 120, align: "text-right" },
+] as const;
+
+function useColumnWidths(storageKey: string, cols: readonly { key: string; w: number }[]) {
+  const [widths, setWidths] = useState<Record<string, number>>(() => {
+    const defs = Object.fromEntries(cols.map((c) => [c.key, c.w]));
+    try { const s = localStorage.getItem(storageKey); return s ? { ...defs, ...JSON.parse(s) } : defs; }
+    catch { return defs; }
+  });
+  useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(widths)); } catch { /* ignore */ } }, [storageKey, widths]);
+  const startResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX, startW = widths[key] ?? 120;
+    const onMove = (ev: MouseEvent) => setWidths((p) => ({ ...p, [key]: Math.max(48, startW + ev.clientX - startX) }));
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+  return { widths, startResize };
+}
+
 export function Operations() {
   const { companyId } = useApp();
   const qc = useQueryClient();
@@ -28,6 +63,7 @@ export function Operations() {
   const projects = useProjects();
   const parties = useCounterparties();
   const legalEntities = useLegalEntities();
+  const { widths, startResize } = useColumnWidths("ops-col-widths", OP_COLS);
 
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
   const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "", no_category: false, excluded: "" });
@@ -274,11 +310,23 @@ export function Operations() {
         )}
 
         <div className="card overflow-x-auto p-0">
-          <table className="table">
+          <table className="table" style={{ tableLayout: "fixed", width: 34 + 96 + OP_COLS.reduce((s, c) => s + (widths[c.key] || c.w), 0) }}>
+            <colgroup>
+              <col style={{ width: 34 }} />
+              {OP_COLS.map((c) => <col key={c.key} style={{ width: widths[c.key] || c.w }} />)}
+              <col style={{ width: 96 }} />
+            </colgroup>
             <thead>
               <tr>
                 <th className="w-8"><input type="checkbox" checked={allSelected} onChange={toggleAll} title="Выделить все на странице" /></th>
-                <th>Дата</th><th>Счёт</th><th>Тип</th><th>Контрагент</th><th>Статья / назначение</th><th>Проект</th><th className="text-right">Сумма</th><th></th>
+                {OP_COLS.map((c) => (
+                  <th key={c.key} className={`relative select-none ${c.align}`}>
+                    <span className="block truncate pr-1">{c.label}</span>
+                    <span onMouseDown={(e) => startResize(c.key, e)} title="Потяните, чтобы изменить ширину столбца"
+                      className="absolute -right-px top-0 h-full w-2 cursor-col-resize hover:bg-brand/50" />
+                  </th>
+                ))}
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -288,23 +336,25 @@ export function Operations() {
                 <tr key={op.id} onClick={() => setEditing(op)}
                     className={`cursor-pointer align-middle hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : isExcluded ? "bg-amber-50" : ""} ${isExcluded ? "border-l-2 border-amber-400" : ""}`}>
                   <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(op.id)} onChange={() => toggleOne(op.id)} /></td>
-                  <td className="whitespace-nowrap">{op.op_date}</td>
-                  <td className="whitespace-nowrap">{op.type === "accrual" ? "—" : accName(op.account_id)}{op.type === "move" ? ` → ${accName(op.to_account_id)}` : ""}</td>
-                  <td className="whitespace-nowrap">
-                    <span className={TYPE_COLOR[op.type]}>{TYPE_LABEL[op.type]}</span>
-                    {op.status === "planned" && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700">план</span>}
-                    {isExcluded && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700" title="Исключена из отчётов («не учитывать»)">не учит.</span>}
-                    {op.bound_move_operation_id && <span className="ml-1 rounded bg-sky-100 px-1 text-xs text-sky-700" title={`Парное перемещение: ${op.account_id ? "списание со счёта" : "зачисление на счёт"}`}>{op.account_id ? "↑ в пути" : "↓ в пути"}</span>}
-                  </td>
-                  <td><div className="max-w-[180px] truncate" title={partyName(op.counterparty_id) || ""}>{partyName(op.counterparty_id)}</div></td>
+                  <td><div className="truncate">{op.op_date}</div></td>
+                  <td><div className="truncate" title={op.type === "accrual" ? "" : (accName(op.account_id) || "")}>{op.type === "accrual" ? "—" : accName(op.account_id)}{op.type === "move" ? ` → ${accName(op.to_account_id)}` : ""}</div></td>
                   <td>
-                    <div className="max-w-[260px] truncate">
+                    <div className="flex items-center gap-1 overflow-hidden whitespace-nowrap">
+                      <span className={TYPE_COLOR[op.type]}>{TYPE_LABEL[op.type]}</span>
+                      {op.status === "planned" && <span className="rounded bg-amber-100 px-1 text-xs text-amber-700">план</span>}
+                      {isExcluded && <span className="rounded bg-amber-100 px-1 text-xs text-amber-700" title="Исключена из отчётов («не учитывать»)">не учит.</span>}
+                      {op.bound_move_operation_id && <span className="rounded bg-sky-100 px-1 text-xs text-sky-700" title={`Парное перемещение: ${op.account_id ? "списание со счёта" : "зачисление на счёт"}`}>{op.account_id ? "↑ в пути" : "↓ в пути"}</span>}
+                    </div>
+                  </td>
+                  <td><div className="truncate" title={partyName(op.counterparty_id) || ""}>{partyName(op.counterparty_id)}</div></td>
+                  <td>
+                    <div className="truncate">
                       {op.type === "accrual" ? `${catName(op.debit_category_id)} ← ${catName(op.credit_category_id)}` : (op.items.length ? <span className="italic text-slate-400">разбито ({op.items.length})</span> : catName(op.category_id))}
                     </div>
-                    {op.description && <div className="max-w-[260px] truncate text-xs text-slate-400" title={op.description}>{op.description}</div>}
+                    {op.description && <div className="truncate text-xs text-slate-400" title={op.description}>{op.description}</div>}
                   </td>
-                  <td><div className="max-w-[110px] truncate">{projName(op.project_id)}</div></td>
-                  <td className={`whitespace-nowrap text-right font-medium ${TYPE_COLOR[op.type]}`}>{op.type === "outcome" ? "−" : op.type === "income" ? "+" : ""}{money(op.amount, op.currency_code)}</td>
+                  <td><div className="truncate" title={projName(op.project_id) || ""}>{projName(op.project_id)}</div></td>
+                  <td className={`text-right font-medium ${TYPE_COLOR[op.type]}`}><div className="truncate">{op.type === "outcome" ? "−" : op.type === "income" ? "+" : ""}{money(op.amount, op.currency_code)}</div></td>
                   <td className="whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                     <button className="text-slate-500 hover:underline" title="Создать копию операции"
                       onClick={() => setEditing({ ...op, id: undefined, op_date: today(), accrual_date: undefined, bound_move_operation_id: undefined })}>копия</button>
