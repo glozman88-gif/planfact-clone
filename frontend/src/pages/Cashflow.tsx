@@ -37,7 +37,7 @@ export function Cashflow() {
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <h1 className="text-2xl font-bold">Отчёт о движении денежных средств</h1>
-        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">RUB</span>
+        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">₽</span>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <RangePicker range={range} onChange={setRange} />

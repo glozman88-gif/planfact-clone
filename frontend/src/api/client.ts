@@ -28,9 +28,13 @@ let SHOW_KOPECKS = true;
 export function setMoneyKopecks(v: boolean) { SHOW_KOPECKS = v; }
 
 // Хелпер форматирования денег
+// Символ валюты по коду (для отображения вместо RUB/USD/EUR)
+const CURRENCY_SYMBOL: Record<string, string> = { RUB: "₽", USD: "$", EUR: "€" };
+
 export function money(value: string | number | null | undefined, currency = "₽"): string {
   const n = Number(value ?? 0);
-  return n.toLocaleString("ru-RU", { maximumFractionDigits: SHOW_KOPECKS ? 2 : 0, minimumFractionDigits: 0 }) + " " + currency;
+  const sym = CURRENCY_SYMBOL[currency] ?? currency;
+  return n.toLocaleString("ru-RU", { maximumFractionDigits: SHOW_KOPECKS ? 2 : 0, minimumFractionDigits: 0 }) + " " + sym;
 }
 
 // Скачивание файла из защищённого эндпойнта (с Bearer-токеном). Имя берём из
