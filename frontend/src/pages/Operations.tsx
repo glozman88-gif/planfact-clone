@@ -64,6 +64,7 @@ export function Operations() {
   const parties = useCounterparties();
   const legalEntities = useLegalEntities();
   const { widths, startResize } = useColumnWidths("ops-col-widths", OP_COLS);
+  const [catEditId, setCatEditId] = useState<number | null>(null);
 
   const [types, setTypes] = useState<Set<OperationType>>(new Set());
   const [filters, setFilters] = useState({ date_from: "", date_to: "", status: "", amount_from: "", amount_to: "", account_id: "", category_id: "", project_id: "", counterparty_id: "", legal_entity_id: "", search: "", no_category: false, excluded: "" });
@@ -136,6 +137,12 @@ export function Operations() {
     mutationFn: async (set: any) => api.post("/api/operations/bulk-update", { ids: Array.from(selected), set }, { params: { company_id: companyId } }),
     onSuccess: () => { invalidateAll(); setSelected(new Set()); setBulkEditing(false); },
   });
+  // Инлайн-смена статьи прямо в строке (по клику на ячейку «Статья»)
+  const setCategory = useMutation({
+    mutationFn: async ({ id, category_id }: { id: number; category_id: number | null }) =>
+      api.post("/api/operations/bulk-update", { ids: [id], set: { category_id } }, { params: { company_id: companyId } }),
+    onSuccess: () => { invalidateAll(); setCatEditId(null); },
+  });
 
   // Сбрасываем выделение при смене фильтров/типов (список меняется)
   useEffect(() => { setSelected(new Set()); }, [filters, Array.from(types).join(",")]);
@@ -160,6 +167,11 @@ export function Operations() {
 
   const accName = (id?: number | null) => accounts.data?.find((a) => a.id === id)?.name ?? "—";
   const catName = (id?: number | null) => categories.data?.find((c) => c.id === id)?.name ?? "";
+  // Статьи для инлайн-выбора: по стороне операции (доход/расход), без архивных
+  const catsForOp = (op: Operation) => {
+    const kind = op.type === "income" ? "income" : op.type === "outcome" ? "outcome" : null;
+    return (categories.data ?? []).filter((c: any) => !c.is_archived && (kind ? c.kind === kind : true));
+  };
   const partyName = (id?: number | null) => parties.data?.find((c) => c.id === id)?.name ?? "";
   const projName = (id?: number | null) => projects.data?.find((c) => c.id === id)?.name ?? "";
   const toggleType = (t: OperationType) => {
@@ -347,10 +359,21 @@ export function Operations() {
                     </div>
                   </td>
                   <td><div className="truncate" title={partyName(op.counterparty_id) || ""}>{partyName(op.counterparty_id)}</div></td>
-                  <td>
-                    <div className="truncate">
-                      {op.type === "accrual" ? `${catName(op.debit_category_id)} ← ${catName(op.credit_category_id)}` : (op.items.length ? <span className="italic text-slate-400">разбито ({op.items.length})</span> : catName(op.category_id))}
-                    </div>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {op.type === "accrual" ? (
+                      <div className="cursor-pointer truncate" onClick={() => setEditing(op)}>{catName(op.debit_category_id)} ← {catName(op.credit_category_id)}</div>
+                    ) : op.items.length ? (
+                      <div className="cursor-pointer truncate italic text-slate-400" onClick={() => setEditing(op)} title="Разбито на части — открыть для редактирования">разбито ({op.items.length})</div>
+                    ) : catEditId === op.id ? (
+                      <SearchSelect autoFocus value={op.category_id ?? ""} options={catsForOp(op)} placeholder="Статья…"
+                        onChange={(v) => setCategory.mutate({ id: op.id, category_id: v ? Number(v) : null })}
+                        onClose={() => setCatEditId(null)} />
+                    ) : (
+                      <div className="cursor-pointer truncate rounded px-1 hover:bg-brand-light/50 hover:ring-1 hover:ring-brand/30"
+                        title="Кликните, чтобы выбрать статью" onClick={() => setCatEditId(op.id)}>
+                        {catName(op.category_id) || <span className="text-slate-400">выбрать статью…</span>}
+                      </div>
+                    )}
                     {op.description && <div className="truncate text-xs text-slate-400" title={op.description}>{op.description}</div>}
                   </td>
                   <td><div className="truncate" title={projName(op.project_id) || ""}>{projName(op.project_id)}</div></td>

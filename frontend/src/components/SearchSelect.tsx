@@ -10,6 +10,7 @@ type Opt = { id: number | string; name: string };
 export function SearchSelect({
   value, onChange, options, placeholder = "Начните вводить…",
   emptyLabel = "—", allowClear = true, className = "", disabled = false,
+  autoFocus = false, onClose,
 }: {
   value: string | number | null | undefined;
   onChange: (value: string) => void;
@@ -19,6 +20,8 @@ export function SearchSelect({
   allowClear?: boolean;
   className?: string;
   disabled?: boolean;
+  autoFocus?: boolean;
+  onClose?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -38,8 +41,11 @@ export function SearchSelect({
   // пункты списка: сверху «очистить» (emptyLabel), затем отфильтрованные варианты
   const items: (Opt | null)[] = allowClear ? [null, ...filtered] : filtered;
 
-  const close = () => { setOpen(false); setQuery(""); };
+  const close = () => { setOpen(false); setQuery(""); onClose?.(); };
   const pick = (o: Opt | null) => { onChange(o ? String(o.id) : ""); close(); inputRef.current?.blur(); };
+
+  // Инлайн-режим: сразу сфокусировать и открыть список
+  useEffect(() => { if (autoFocus) { inputRef.current?.focus(); setOpen(true); setHi(0); } }, [autoFocus]);
 
   useEffect(() => {
     if (!open) return;
