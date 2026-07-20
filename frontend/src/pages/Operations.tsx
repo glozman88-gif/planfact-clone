@@ -278,30 +278,35 @@ export function Operations() {
             <thead>
               <tr>
                 <th className="w-8"><input type="checkbox" checked={allSelected} onChange={toggleAll} title="Выделить все на странице" /></th>
-                <th>Дата</th><th>Счёт</th><th>Тип</th><th>Контрагент</th><th>Статья</th><th>Проект</th><th className="text-right">Сумма</th><th></th>
+                <th>Дата</th><th>Счёт</th><th>Тип</th><th>Контрагент</th><th>Статья / назначение</th><th>Проект</th><th className="text-right">Сумма</th><th></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((op) => {
                 const isExcluded = op.excluded || op.items?.some((i: any) => i.excluded);
                 return (
-                <tr key={op.id} className={`hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : isExcluded ? "bg-amber-50" : ""} ${isExcluded ? "border-l-2 border-amber-400" : ""}`}>
-                  <td><input type="checkbox" checked={selected.has(op.id)} onChange={() => toggleOne(op.id)} /></td>
+                <tr key={op.id} onClick={() => setEditing(op)}
+                    className={`cursor-pointer align-middle hover:bg-slate-50 ${selected.has(op.id) ? "bg-brand-light/40" : isExcluded ? "bg-amber-50" : ""} ${isExcluded ? "border-l-2 border-amber-400" : ""}`}>
+                  <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(op.id)} onChange={() => toggleOne(op.id)} /></td>
                   <td className="whitespace-nowrap">{op.op_date}</td>
-                  <td>{op.type === "accrual" ? "—" : accName(op.account_id)}{op.type === "move" ? ` → ${accName(op.to_account_id)}` : ""}</td>
+                  <td className="whitespace-nowrap">{op.type === "accrual" ? "—" : accName(op.account_id)}{op.type === "move" ? ` → ${accName(op.to_account_id)}` : ""}</td>
                   <td className="whitespace-nowrap">
                     <span className={TYPE_COLOR[op.type]}>{TYPE_LABEL[op.type]}</span>
                     {op.status === "planned" && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700">план</span>}
                     {isExcluded && <span className="ml-1 rounded bg-amber-100 px-1 text-xs text-amber-700" title="Исключена из отчётов («не учитывать»)">не учит.</span>}
                     {op.bound_move_operation_id && <span className="ml-1 rounded bg-sky-100 px-1 text-xs text-sky-700" title={`Парное перемещение: ${op.account_id ? "списание со счёта" : "зачисление на счёт"}`}>{op.account_id ? "↑ в пути" : "↓ в пути"}</span>}
                   </td>
-                  <td>{partyName(op.counterparty_id)}</td>
-                  <td>{op.type === "accrual" ? `${catName(op.debit_category_id)} ← ${catName(op.credit_category_id)}` : (op.items.length ? <span className="italic text-slate-400">разбито ({op.items.length})</span> : catName(op.category_id))}</td>
-                  <td>{projName(op.project_id)}</td>
+                  <td><div className="max-w-[180px] truncate" title={partyName(op.counterparty_id) || ""}>{partyName(op.counterparty_id)}</div></td>
+                  <td>
+                    <div className="max-w-[260px] truncate">
+                      {op.type === "accrual" ? `${catName(op.debit_category_id)} ← ${catName(op.credit_category_id)}` : (op.items.length ? <span className="italic text-slate-400">разбито ({op.items.length})</span> : catName(op.category_id))}
+                    </div>
+                    {op.description && <div className="max-w-[260px] truncate text-xs text-slate-400" title={op.description}>{op.description}</div>}
+                  </td>
+                  <td><div className="max-w-[110px] truncate">{projName(op.project_id)}</div></td>
                   <td className={`whitespace-nowrap text-right font-medium ${TYPE_COLOR[op.type]}`}>{op.type === "outcome" ? "−" : op.type === "income" ? "+" : ""}{money(op.amount, op.currency_code)}</td>
-                  <td className="whitespace-nowrap text-right">
-                    <button className="text-brand hover:underline" onClick={() => setEditing(op)}>ред.</button>
-                    <button className="ml-2 text-slate-500 hover:underline" title="Создать копию операции"
+                  <td className="whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                    <button className="text-slate-500 hover:underline" title="Создать копию операции"
                       onClick={() => setEditing({ ...op, id: undefined, op_date: today(), accrual_date: undefined, bound_move_operation_id: undefined })}>копия</button>
                     <button className="ml-2 text-red-500 hover:underline" onClick={() => confirm("Удалить операцию?") && remove.mutate(op.id)}>×</button>
                   </td>
