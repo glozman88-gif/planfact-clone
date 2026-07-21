@@ -8,7 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
 from app.core.db import SessionLocal
 from app.models import BankConnection
@@ -20,19 +20,38 @@ CHECK_INTERVAL = 1800  # проверять раз в 30 минут
 
 
 async def run_due_syncs() -> int:
-    """Синхронизировать подключения, у которых подошёл срок. Возвращает число синхронизаций."""
+    """Синхронизировать подключения, у которых подошёл срок. Возвращает число синхронизаций.
+
+    У uvicorn несколько воркеров — в КАЖДОМ свой планировщик. Чтобы одно подключение не
+    синхронизировали два воркера одновременно (это двоило операции), перед синхронизацией
+    делаем АТОМАРНЫЙ «захват»: одним UPDATE ставим last_sync_at=now при условии, что срок
+    подошёл. UPDATE с блокировкой строки выполнит ровно один воркер (rowcount=1) — он и
+    синхронизирует; остальные получают rowcount=0 и пропускают.
+    """
     from app.api.banks import resync_core
     async with SessionLocal() as db:
         conns = (await db.execute(select(BankConnection).where(BankConnection.token.isnot(None)))).scalars().all()
-        pending = [(c.id, c.bank, c.sync_freq or "daily", c.last_sync_at) for c in conns]
+        pending = [(c.id, c.bank, c.sync_freq or "daily") for c in conns]
     now = datetime.now(timezone.utc)
     done = 0
-    for conn_id, bank, freq, last_sync in pending:
+    for conn_id, bank, freq in pending:
         if freq == "manual":
             continue
         hours = FREQ_HOURS.get(freq, 24)
-        if last_sync is not None and (now - last_sync) < timedelta(hours=hours):
-            continue
+        cutoff = now - timedelta(hours=hours)
+        async with SessionLocal() as dbc:
+            res = await dbc.execute(
+                update(BankConnection)
+                .where(
+                    BankConnection.id == conn_id,
+                    BankConnection.token.isnot(None),
+                    or_(BankConnection.last_sync_at.is_(None), BankConnection.last_sync_at < cutoff),
+                )
+                .values(last_sync_at=now)
+            )
+            await dbc.commit()
+            if res.rowcount == 0:
+                continue  # ещё не пора или подключение уже захватил другой воркер
         try:
             async with SessionLocal() as db2:
                 conn = await db2.get(BankConnection, conn_id)
