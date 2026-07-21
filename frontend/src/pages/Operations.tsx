@@ -358,7 +358,8 @@ export function Operations() {
                       {op.bound_move_operation_id && <span className="rounded bg-sky-100 px-1 text-xs text-sky-700" title={`Парное перемещение: ${op.account_id ? "списание со счёта" : "зачисление на счёт"}`}>{op.account_id ? "↑ в пути" : "↓ в пути"}</span>}
                     </div>
                   </td>
-                  <td><div className="truncate" title={partyName(op.counterparty_id) || ""}>{partyName(op.counterparty_id)}</div></td>
+                  <td><div className="break-words" title={partyName(op.counterparty_id) || ""}
+                      style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{partyName(op.counterparty_id)}</div></td>
                   <td onClick={(e) => e.stopPropagation()}>
                     {op.type === "accrual" ? (
                       <div className="cursor-pointer truncate" onClick={() => setEditing(op)}>{catName(op.debit_category_id)} ← {catName(op.credit_category_id)}</div>
